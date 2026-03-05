@@ -41,12 +41,28 @@ parser.add_text(script)
 
 formatted_script = writer.write(parser.script)
 
-parsedScenes = []
+def parseHeading(heading: str):
+    match = re.match(r'^(INT\.|EXT\.|INT/EXT\.)\s*(.*?)\s*-\s*(.*)$', heading)
+    if match:
+        return match.group(1), match.group(2), match.group(3)
+    return None, None, None
+
+def buildScene(sceneNumber, heading, descriptionLines):
+    interiorExterior, location, timeDay = parseHeading(heading) if heading else (None, None, None)
+    return ParsedScene(
+        sceneNumber=sceneNumber,
+        heading=heading,
+        description="\n".join(descriptionLines),
+        interiorExterior=interiorExterior,
+        location=location,
+        timeDay=timeDay
+    )
+
+scenes = []
 sceneNumber = 1
 currentHeading = None
 descriptionLines = []
-bodyLines = []
-currentDescription = False
+collectingDescription = False
 hasHeading = False
 
 for element in parser.script.elements:
@@ -54,64 +70,22 @@ for element in parser.script.elements:
     if sceneType == "SceneHeading":
         hasHeading = True
         if currentHeading is not None:
-            parsedScenes.append(
-                ParsedScene(
-                    sceneNumber=sceneNumber,
-                    heading=currentHeading,
-                    description="\n".join(descriptionLines)
-                )
-            )
+            scenes.append(buildScene(sceneNumber, currentHeading, descriptionLines))
             sceneNumber += 1
-
         currentHeading = element.text
         descriptionLines = []
-        bodyLines = []
-        currentDescription = True
+        collectingDescription = True
     elif sceneType == "Action":
-        if currentDescription or not hasHeading:
+        if collectingDescription or not hasHeading:
             descriptionLines.append(element.text)
-        bodyLines.append(element.text)
     elif sceneType in ("Dialogue", "Character", "Parenthetical", "Transition"):
-        currentDescription = False
-        bodyLines.append(getattr(element, 'text', ''))
+        collectingDescription = False
 
-
-if hasHeading and currentHeading is not None:
-    parsedScenes.append(
-        ParsedScene(
-            sceneNumber=sceneNumber,
-            heading=currentHeading,
-            description="\n".join(descriptionLines)
-        )
-    )
+if currentHeading is not None:
+    scenes.append(buildScene(sceneNumber, currentHeading, descriptionLines))
 elif not hasHeading and descriptionLines:
-    parsedScenes.append(
-        ParsedScene(
-            sceneNumber=1,
-            heading=None,
-            description="\n".join(descriptionLines)
-        )
-    )
+    scenes.append(buildScene(1, None, descriptionLines))
 
-def parseHeading(heading: str):
-    match = re.match(r'^(INT\.|EXT\.|INT/EXT\.)\s*(.*?)\s*-\s*(.*)$', heading)
-    if match:
-        return match.group(1), match.group(2), match.group(3)
-    return None, None, None
-finalScenes = []
-for scene in parsedScenes:
-    interiorExterior, location, timeDay = parseHeading(scene.heading)
-    finalScenes.append(
-        ParsedScene(
-            sceneNumber=scene.sceneNumber,
-            heading=scene.heading,
-            description=scene.description,
-            interiorExterior=interiorExterior,
-            location=location,
-            timeDay=timeDay
-        )
-    )
-
-for scene in finalScenes:
+for scene in scenes:
     print(scene)
 
