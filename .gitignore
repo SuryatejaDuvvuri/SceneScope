@@ -1,5 +1,15 @@
+<<<<<<< HEAD
 __pycache__/
 .env
 node_modules/
 venv/
 
+=======
+.DS_Store
+.env
+/node_modules/
+
+# React Router
+/.react-router/
+/build/
+>>>>>>> master
