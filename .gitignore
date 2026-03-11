@@ -3,6 +3,10 @@ __pycache__/
 .env
 node_modules/
 venv/
+*.db
+backend/static/images/
+.react-router/
+build/
 
 =======
 .DS_Store
