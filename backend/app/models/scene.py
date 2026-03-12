@@ -33,6 +33,7 @@ class DirectorNotes(BaseModel):
     reasoning: str = ""
     prompt_modifier: str = ""
     follow_up: str | None = None
+    references_used: list[str] = Field(default_factory=list)
 
 
 class ConsultRequest(BaseModel):
@@ -57,6 +58,7 @@ class ConsultResponse(BaseModel):
     reasoning: str
     prompt_modifier: str
     follow_up: str | None = None
+    references_used: list[str] = Field(default_factory=list)
 
 
 class SceneIterationResponse(BaseModel):

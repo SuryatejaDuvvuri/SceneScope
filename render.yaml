@@ -1,0 +1,18 @@
+services:
+  - type: web
+    name: scenescope-backend
+    runtime: python
+    rootDir: backend
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /api/health
+    plan: free
+    envVars:
+      - key: DATABASE_PATH
+        value: /opt/render/project/src/backend/data/scenescope.db
+      - key: STATIC_DIR
+        value: /opt/render/project/src/backend/data/static/images
+    disk:
+      name: scenescope-data
+      mountPath: /opt/render/project/src/backend/data
+      sizeGB: 1

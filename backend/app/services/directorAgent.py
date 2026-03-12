@@ -1,15 +1,18 @@
 """
-Director Agent
-──────────────
-An AI persona that acts as an expert film director.
-Interprets vague user feedback into specific visual/cinematographic direction,
-provides educational reasoning for film students, and acts as the intermediary
-between the user and the image generator.
+Director Agent — "The Director"
+───────────────────────────────
+A Nolan-inspired AI director persona with access to an internal film
+reference library.  Before giving advice, the Director retrieves relevant
+films, cinematography techniques, and DP signatures from the library so
+its suggestions are grounded in real filmmaking knowledge — not just
+parametric LLM memory.
 
-The Director is CONVERSATIONAL — it interprets feedback, asks a follow-up
-question to confirm its understanding, and refines its direction based on
-the user's response. Only when the user accepts does the direction get
-passed to the image generator.
+Flow:
+  1. User gives feedback (even vague: "too bright", "doesn't feel right")
+  2. We query the film library for relevant references (mood + genre + keywords)
+  3. References are injected into the Director's context
+  4. Director interprets, advises, cites references, asks a follow-up
+  5. Response includes `references_used` so the frontend can display them
 """
 
 import requests
@@ -17,39 +20,47 @@ import json
 import re
 from typing import Optional
 from app.config import settings
+from app.services.filmLibrary import gather_references
+from app.services.textSummary import summarize_to_chars
 
 
-DIRECTOR_SYSTEM = """You are an expert film director with 30 years of experience in visual storytelling. You've studied under masters like Roger Deakins, Emmanuel Lubezki, and Wally Pfister.
+# ── System Prompts ──
 
-Your job: interpret what the user wants for a scene and translate it into precise visual direction for a storyboard artist. You speak with authority but warmth — like a professor who genuinely wants their student to understand WHY each choice matters.
+DIRECTOR_SYSTEM = """You are Christopher Nolan — or at least, you direct like him. You believe every frame must earn its place. You favor practical, in-camera solutions over gimmicks. You think in IMAX scale but care about the smallest human detail. You've worked with Wally Pfister and Hoyte van Hoytema, and you respect Roger Deakins, Gordon Willis, and Emmanuel Lubezki as masters of the craft.
+
+Your job: interpret what the user wants for a scene and translate it into precise visual direction for a storyboard artist. You speak with quiet authority — you don't lecture, you share insight. When a film student asks "why?", you always have a real-world example ready.
 
 When the user gives feedback (even vague feedback like "too bright" or "doesn't feel right"), you:
-1. Acknowledge what they're feeling
+1. Acknowledge what they're feeling — trust the instinct
 2. Diagnose what's causing it cinematically
 3. Provide specific, actionable visual direction
-4. Briefly explain WHY this direction works (the educational part)
+4. Explain WHY, citing the reference films and techniques provided to you
 5. Ask ONE follow-up question to confirm you understood correctly
+
+You will be given a REFERENCE LIBRARY section containing relevant films, techniques, and cinematographers. USE THESE REFERENCES in your reasoning and visual_direction. Cite specific films, DPs, or techniques by name when they directly inform your advice.
 
 You always respond with a JSON object:
 {
   "interpretation": "What you think the user is asking for, in plain language",
-  "visual_direction": "Specific instructions for the storyboard artist (lighting, composition, color, angle, mood)",
-  "reasoning": "1-2 sentences explaining the cinematographic principle behind your choice. Reference real films or cinematographers when relevant.",
+  "visual_direction": "Specific instructions for the storyboard artist (lighting, composition, color, angle, mood). Cite reference films/techniques.",
+  "reasoning": "2-3 sentences explaining the cinematographic principle behind your choice. Reference specific films or cinematographers from the library.",
   "prompt_modifier": "A concise phrase to append to the image generation prompt (under 40 words)",
-  "follow_up": "ONE specific question to confirm your interpretation or offer an alternative approach. Keep it short."
+  "follow_up": "ONE specific question to confirm your interpretation or offer an alternative approach. Keep it short.",
+  "references_used": ["Film or technique name 1", "Film or technique name 2"]
 }
 
 Rules:
 - ALWAYS ask a follow-up question — you're having a conversation, not issuing orders
+- ALWAYS populate references_used with the specific films/techniques that informed your advice
 - If the feedback is vague, your follow-up should help narrow down exactly what the user envisions
-- Reference real films/cinematographers when it adds educational value
 - Keep prompt_modifier focused and technical — it goes directly to the image generator
+- Prefer practical, real-world cinematographic solutions over abstract concepts
 - Respond with ONLY the JSON object, no other text"""
 
 
-DIRECTOR_FOLLOWUP_SYSTEM = """You are an expert film director continuing a conversation about a scene's visual direction. The user has responded to your previous follow-up question.
+DIRECTOR_FOLLOWUP_SYSTEM = """You are Christopher Nolan continuing a conversation about a scene's visual direction. The user has responded to your previous follow-up question.
 
-Based on the full conversation history, update your visual direction. The user may have:
+Based on the full conversation history and the reference material provided, update your visual direction. The user may have:
 - Confirmed your interpretation (refine and finalize)
 - Corrected your interpretation (adjust your direction)
 - Added new details (incorporate them)
@@ -57,16 +68,18 @@ Based on the full conversation history, update your visual direction. The user m
 Respond with a JSON object:
 {
   "interpretation": "Your updated understanding based on the full conversation",
-  "visual_direction": "Updated specific instructions incorporating the user's response",
-  "reasoning": "Updated explanation of the cinematographic choices",
+  "visual_direction": "Updated specific instructions incorporating the user's response and reference material",
+  "reasoning": "Updated explanation citing specific films or techniques",
   "prompt_modifier": "Updated concise phrase for the image generator (under 40 words)",
-  "follow_up": "Another follow-up question if you need more clarity, or null if you're confident in the direction"
+  "follow_up": "Another follow-up question if you need more clarity, or null if you're confident in the direction",
+  "references_used": ["Film or technique name 1", "Film or technique name 2"]
 }
 
 Rules:
 - If the user's response makes the direction clear, set follow_up to null
 - If there's still ambiguity, ask ONE more targeted question
 - Always update prompt_modifier to reflect the latest understanding
+- ALWAYS populate references_used
 - Respond with ONLY the JSON object, no other text"""
 
 
@@ -79,10 +92,46 @@ User's Feedback: "{feedback}"
 
 {context}
 
-Based on your expertise, interpret the user's feedback and provide specific visual direction."""
+── REFERENCE LIBRARY (use these to ground your advice) ──
+{references}
+
+Based on your expertise and the references above, interpret the user's feedback and provide specific visual direction."""
 
 
-def _call_groq(messages: list[dict], max_tokens: int = 400) -> dict:
+def _format_references(refs: dict) -> str:
+    """Format gathered references into a readable block for the LLM context."""
+    parts = []
+
+    if refs.get("reference_films"):
+        parts.append("FILMS:")
+        for f in refs["reference_films"]:
+            techniques = "; ".join(f.get("techniques", []))
+            parts.append(f"  • {f['film']} (DP: {f['dp']}) — {f['visual_signature']}")
+            if techniques:
+                parts.append(f"    Techniques: {techniques}")
+
+    if refs.get("techniques"):
+        parts.append("\nTECHNIQUES:")
+        for t in refs["techniques"]:
+            examples = ", ".join(t.get("example_films", []))
+            parts.append(f"  • {t['technique']} [{t['category']}] — {t['description']}")
+            parts.append(f"    When to use: {t['when_to_use']}")
+            if examples:
+                parts.append(f"    Examples: {examples}")
+
+    if refs.get("cinematographers"):
+        parts.append("\nCINEMATOGRAPHERS:")
+        for d in refs["cinematographers"]:
+            films = ", ".join(d.get("notable_films", []))
+            parts.append(f"  • {d['name']} — {d['known_for']}")
+            parts.append(f"    Signature: {d['signature_look']}")
+            if films:
+                parts.append(f"    Films: {films}")
+
+    return "\n".join(parts) if parts else "No specific references retrieved."
+
+
+def _call_groq(messages: list[dict], max_tokens: int = 600) -> dict:
     """Make a Groq API call and parse the JSON response."""
     url = "https://api.groq.com/openai/v1/chat/completions"
     headers = {
@@ -108,6 +157,37 @@ def _call_groq(messages: list[dict], max_tokens: int = 400) -> dict:
     return json.loads(content)
 
 
+def _build_result(parsed: dict, fallback_text: str, refs: dict) -> dict:
+    """Normalize an LLM response into the standard director result dict."""
+    # Merge LLM-cited references with the library entries we actually provided
+    llm_refs = parsed.get("references_used", [])
+    library_titles = []
+    for f in refs.get("reference_films", []):
+        library_titles.append(f["film"])
+    for t in refs.get("techniques", []):
+        library_titles.append(t["technique"])
+    for d in refs.get("cinematographers", []):
+        library_titles.append(d["name"])
+
+    # Deduplicate while preserving order
+    seen = set()
+    all_refs = []
+    for r in llm_refs + library_titles:
+        key = r.lower().strip()
+        if key not in seen:
+            seen.add(key)
+            all_refs.append(r)
+
+    return {
+        "interpretation": parsed.get("interpretation", ""),
+        "visual_direction": parsed.get("visual_direction", ""),
+        "reasoning": parsed.get("reasoning", ""),
+        "prompt_modifier": parsed.get("prompt_modifier", fallback_text),
+        "follow_up": parsed.get("follow_up"),
+        "references_used": all_refs,
+    }
+
+
 def consult_director(
     heading: str,
     description: str,
@@ -116,19 +196,19 @@ def consult_director(
     feedback: str,
     answers: Optional[dict] = None,
     consistency_context: str = "",
+    genre: str | None = None,
 ) -> dict:
     """
-    Initial consultation: Director interprets feedback and asks a follow-up.
+    Initial consultation: Director retrieves references, interprets feedback,
+    and asks a follow-up.
 
     Returns dict with:
-      - interpretation: what the director thinks the user means
-      - visual_direction: specific cinematographic instructions
-      - reasoning: educational explanation
-      - prompt_modifier: concise phrase for the image generator
+      - interpretation, visual_direction, reasoning, prompt_modifier
       - follow_up: question to confirm understanding (or null)
+      - references_used: list of film/technique names cited
     """
 
-    # If mood is None, 'auto', or empty, classify using moodClassifier
+    # Mood fallback
     if not mood or mood.lower() == "auto":
         try:
             from app.services.moodClassifier import classify_mood
@@ -137,6 +217,10 @@ def consult_director(
         except Exception as e:
             print(f"Mood classification failed: {e}")
             mood = "neutral"
+
+    # ── Tool call: retrieve references from the film library ──
+    refs = gather_references(mood=mood, genre=genre, feedback=feedback)
+    references_text = _format_references(refs)
 
     # Build context from answers and consistency info
     context_parts = []
@@ -149,13 +233,16 @@ def consult_director(
 
     context = "\n\n".join(context_parts) if context_parts else "No additional context."
 
+    safe_description = summarize_to_chars(description, 500, focus_text=f"{heading} {mood} {feedback}")
+
     user_content = DIRECTOR_USER_TEMPLATE.format(
         heading=heading or "UNKNOWN",
-        description=description[:500],
+        description=safe_description,
         mood=mood or "neutral",
         visual_summary=visual_summary or "No visual summary available.",
         feedback=feedback,
         context=context,
+        references=references_text,
     )
 
     messages = [
@@ -165,13 +252,7 @@ def consult_director(
 
     try:
         parsed = _call_groq(messages)
-        return {
-            "interpretation": parsed.get("interpretation", ""),
-            "visual_direction": parsed.get("visual_direction", ""),
-            "reasoning": parsed.get("reasoning", ""),
-            "prompt_modifier": parsed.get("prompt_modifier", feedback),
-            "follow_up": parsed.get("follow_up"),
-        }
+        return _build_result(parsed, feedback, refs)
     except Exception as e:
         print(f"Director Agent failed: {e}")
         return {
@@ -180,6 +261,7 @@ def consult_director(
             "reasoning": "Director unavailable — using raw feedback.",
             "prompt_modifier": feedback,
             "follow_up": None,
+            "references_used": [],
         }
 
 
@@ -190,27 +272,30 @@ def continue_consultation(
     visual_summary: str,
     conversation_history: list[dict],
     user_response: str,
+    genre: str | None = None,
 ) -> dict:
     """
     Continue the Director conversation after user responds to a follow-up.
 
-    conversation_history: list of previous director exchanges, each containing
-      the director's notes and the user's response. Format:
-      [{"director": {...notes}, "user_response": "..."}, ...]
-
-    user_response: the user's latest response to the director's follow-up
-
-    Returns same dict structure as consult_director.
+    Retrieves fresh references based on the latest user response so the
+    Director can pivot its advice if the user shifts direction.
     """
+    # ── Tool call: retrieve references for the new context ──
+    refs = gather_references(mood=mood or "neutral", genre=genre, feedback=user_response)
+    references_text = _format_references(refs)
+
     # Build the message history so the LLM sees the full conversation
     messages = [{"role": "system", "content": DIRECTOR_FOLLOWUP_SYSTEM}]
 
-    # Scene context as the first user message
+    # Scene context + references as the first user message
+    safe_description = summarize_to_chars(description, 500, focus_text=f"{heading} {mood} {user_response}")
+
     scene_context = (
         f"Scene: {heading or 'UNKNOWN'}\n"
-        f"Description: {description[:500]}\n"
+        f"Description: {safe_description}\n"
         f"Current Mood: {mood or 'neutral'}\n"
-        f"Visual Summary: {visual_summary or 'N/A'}"
+        f"Visual Summary: {visual_summary or 'N/A'}\n\n"
+        f"── REFERENCE LIBRARY ──\n{references_text}"
     )
     messages.append({"role": "user", "content": scene_context})
 
@@ -226,13 +311,7 @@ def continue_consultation(
 
     try:
         parsed = _call_groq(messages)
-        return {
-            "interpretation": parsed.get("interpretation", ""),
-            "visual_direction": parsed.get("visual_direction", ""),
-            "reasoning": parsed.get("reasoning", ""),
-            "prompt_modifier": parsed.get("prompt_modifier", user_response),
-            "follow_up": parsed.get("follow_up"),
-        }
+        return _build_result(parsed, user_response, refs)
     except Exception as e:
         print(f"Director Agent follow-up failed: {e}")
         return {
@@ -241,4 +320,5 @@ def continue_consultation(
             "reasoning": "Director unavailable — using raw response.",
             "prompt_modifier": user_response,
             "follow_up": None,
+            "references_used": [],
         }

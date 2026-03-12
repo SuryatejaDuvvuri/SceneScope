@@ -1,8 +1,20 @@
 -- SceneScope Database Schema
 -- Run: sqlite3 scenescope.db < scripts/db.sql
 
+CREATE TABLE IF NOT EXISTS users (
+    id TEXT PRIMARY KEY,
+    email TEXT NOT NULL UNIQUE,
+    name TEXT,
+    avatar_url TEXT,
+    provider TEXT NOT NULL DEFAULT 'google',   -- oauth provider
+    provider_id TEXT NOT NULL,                 -- provider-specific user id
+    created_at TEXT DEFAULT (datetime('now')),
+    updated_at TEXT DEFAULT (datetime('now'))
+);
+
 CREATE TABLE IF NOT EXISTS projects (
     id TEXT PRIMARY KEY,
+    user_id TEXT REFERENCES users(id) ON DELETE CASCADE,
     title TEXT NOT NULL,
     genre TEXT,
     time_period TEXT,
@@ -55,6 +67,8 @@ CREATE TABLE IF NOT EXISTS characters (
     updated_at TEXT DEFAULT (datetime('now'))
 );
 
+CREATE INDEX IF NOT EXISTS idx_projects_user_id ON projects(user_id);
 CREATE INDEX IF NOT EXISTS idx_scenes_project_id ON scenes(project_id);
 CREATE INDEX IF NOT EXISTS idx_iterations_scene_id ON scene_iterations(scene_id);
 CREATE INDEX IF NOT EXISTS idx_characters_project_id ON characters(project_id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_users_email ON users(email);

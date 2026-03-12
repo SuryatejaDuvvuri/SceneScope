@@ -3,24 +3,10 @@ Shot Type Suggester Service
 ────────────────────────────
 Suggests camera shots, angles, and movements based on scene mood + content.
 
-This is what makes SceneScope useful for film students — it doesn't just
+This is what makes SceneScope useful for film students. It doesn't just
 generate a sketch, it teaches them WHY certain shots work for certain moods.
-
-YOUR JOB (the complex part):
-- Implement suggest_shots() — the core logic
-- Decide: rule-based mapping vs LLM-powered suggestions vs hybrid
-
-Approach options:
-  A) Rule-based: mood → hardcoded shot mappings (fast, deterministic, less nuanced)
-  B) LLM-powered: send mood + description to Groq, ask for shot suggestions (slower, smarter)
-  C) Hybrid: rule-based primary shot + LLM for alternatives (recommended)
 """
-
 from app.models.common import ShotSuggestion, ShotSuggestions
-
-
-# ── Shot Knowledge Base (your starting point) ──
-# Film theory: shot types communicate specific emotional information
 
 MOOD_SHOT_DEFAULTS = {
     "tense": ShotSuggestion(

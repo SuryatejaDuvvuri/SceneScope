@@ -7,11 +7,12 @@ PDF storyboard export using fpdf2.
 import os
 import tempfile
 import urllib.request
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Depends
 from fastapi.responses import FileResponse
 from fpdf import FPDF
 from app.db import get_db, from_json
 from app.config import settings
+from app.auth import get_current_user
 
 router = APIRouter(tags=["export"])
 
@@ -34,7 +35,7 @@ class StoryboardPDF(FPDF):
         self.set_font("DejaVu", "B", 14)
         self.cell(0, 10, self.title, align="C", new_x="LMARGIN", new_y="NEXT")
         self.ln(4)
-
+ 
     def footer(self):
         self.set_y(-15)
         self.set_font("DejaVu", "I", 8)
@@ -83,12 +84,12 @@ def _add_scene_page(pdf: StoryboardPDF, scene: dict, sketch_path: str | None):
 
 
 @router.get("/projects/{project_id}/export")
-async def export_storyboard(project_id: str):
+async def export_storyboard(project_id: str, user: dict = Depends(get_current_user)):
     """Generate and download a PDF storyboard of all locked scenes."""
     db = await get_db()
     try:
-        # Verify project
-        row = await db.execute("SELECT * FROM projects WHERE id = ?", (project_id,))
+        # Verify project and ownership
+        row = await db.execute("SELECT * FROM projects WHERE id = ? AND user_id = ?", (project_id, user["id"]))
         project = await row.fetchone()
         if not project:
             raise HTTPException(status_code=404, detail="Project not found")

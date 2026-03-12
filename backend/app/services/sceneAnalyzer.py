@@ -3,6 +3,7 @@ import json
 import re
 from typing import List, Optional
 from app.config import settings
+from app.services.textSummary import summarize_to_chars
 
 
 class AnalysisResult:
@@ -128,11 +129,14 @@ def generateRefinementQuestions(
             qa_pairs.append(f"  Q: {q_text}\n  A: {a_text}")
         prev_qa = "\n".join(qa_pairs)
 
+    safe_description = summarize_to_chars(description, 500, focus_text=f"{heading} {mood}")
+    safe_visual_summary = summarize_to_chars(visual_summary, 300, focus_text=f"{heading} {mood}")
+
     userContent = (
         f"Scene Heading: {heading}\n"
-        f"Scene Description:\n{description[:500]}\n"
+        f"Scene Description:\n{safe_description}\n"
         f"Mood: {mood}\n"
-        f"Visual Summary: {visual_summary[:300]}\n"
+        f"Visual Summary: {safe_visual_summary}\n"
         f"Iteration: {iteration_number}\n\n"
         f"Previous questions and answers:\n{prev_qa}\n\n"
     )

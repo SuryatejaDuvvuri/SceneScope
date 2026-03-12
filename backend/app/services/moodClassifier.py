@@ -2,14 +2,31 @@ import requests
 import json
 from typing import Optional
 from app.config import settings
+from app.services.textSummary import summarize_to_chars
 
-# Primary: your fine-tuned model (tense/somber binary classifier)
-HF_CUSTOM_MODEL = settings.HF_MODEL_ID
-HF_CUSTOM_URL = f"https://api-inference.huggingface.co/models/{HF_CUSTOM_MODEL}"
+# Local model (loaded once on first use)
+_local_pipeline = None
 
-# Fallback: generic emotion model
+def _get_local_pipeline():
+    """Lazily load the custom RoBERTa model via transformers pipeline."""
+    global _local_pipeline
+    if _local_pipeline is None:
+        try:
+            from transformers import pipeline
+            _local_pipeline = pipeline(
+                "text-classification",
+                model=settings.HF_MODEL_ID,
+                top_k=None,
+            )
+            print(f"Loaded local model: {settings.HF_MODEL_ID}")
+        except Exception as e:
+            print(f"Failed to load local model: {e}")
+            _local_pipeline = False  # Mark as failed so we don't retry
+    return _local_pipeline if _local_pipeline is not False else None
+
+# Fallback: generic emotion model (via HF Inference API)
 HF_GENERIC_MODEL = "j-hartmann/emotion-english-distilroberta-base"
-HF_GENERIC_URL = f"https://api-inference.huggingface.co/models/{HF_GENERIC_MODEL}"
+HF_GENERIC_URL = f"https://router.huggingface.co/hf-inference/models/{HF_GENERIC_MODEL}"
 
 # Map the generic model's 7 emotions → our mood labels
 EMOTION_TO_MOOD = {
@@ -33,31 +50,31 @@ class MoodResult:
 
 
 def classify_mood_custom(text: str) -> Optional[MoodResult]:
-    """Use your fine-tuned SceneScope model (tense vs somber)."""
-    headers = {"Authorization": f"Bearer {settings.HUGGINGFACE_API_TOKEN}"}
-    payload = {"inputs": text[:1500]}
+    """Primary: run the fine-tuned RoBERTa model locally via transformers."""
+    pipe = _get_local_pipeline()
+    if pipe is None:
+        return None
 
     try:
-        response = requests.post(HF_CUSTOM_URL, headers=headers, json=payload, timeout=20)
-        results = response.json()
-
-        if results and isinstance(results, list):
-            predictions = results[0] if isinstance(results[0], list) else results
-            top = max(predictions, key=lambda x: x["score"])
-            return MoodResult(
-                mood=top["label"],
-                confidence=top["score"],
-                source="scenescope-roberta"
-            )
+        truncated = summarize_to_chars(text, 1500, focus_text="emotion mood tension tone")
+        results = pipe(truncated)
+        # results is [[{'label': 'action', 'score': 0.58}, ...]]
+        predictions = results[0] if isinstance(results[0], list) else results
+        top = max(predictions, key=lambda x: x["score"])
+        return MoodResult(
+            mood=top["label"],
+            confidence=top["score"],
+            source="scenescope-roberta-local"
+        )
     except Exception as e:
-        print(f"Custom model failed: {e}")
+        print(f"Local custom model failed: {e}")
     return None
 
 
 def classify_mood_generic(text: str) -> Optional[MoodResult]:
     """Fallback: generic emotion model with mood mapping."""
     headers = {"Authorization": f"Bearer {settings.HUGGINGFACE_API_TOKEN}"}
-    payload = {"inputs": text[:1500]}
+    payload = {"inputs": summarize_to_chars(text, 1500, focus_text="emotion mood tension tone")}
 
     try:
         response = requests.post(HF_GENERIC_URL, headers=headers, json=payload, timeout=15)
@@ -78,25 +95,30 @@ def classify_mood_generic(text: str) -> Optional[MoodResult]:
 
 
 def classify_mood_groq(text: str) -> Optional[MoodResult]:
-    """Last resort: ask Groq LLM to classify."""
+    """Last resort: ask Groq LLM to classify mood."""
     url = "https://api.groq.com/openai/v1/chat/completions"
     headers = {
         "Authorization": f"Bearer {settings.GROQ_API_KEY}",
-        "Content-Type": "application/json"
+        "Content-Type": "application/json",
     }
+    truncated = summarize_to_chars(text, 1500, focus_text="emotion mood tension tone")
     payload = {
         "model": settings.GROQ_MODEL,
         "messages": [
             {
                 "role": "system",
-                "content": 'You are a screenplay tone analyzer. Given a scene, respond with ONLY a JSON object: {"mood": "tense|somber", "confidence": 0.0-1.0}. No other text.'
+                "content": (
+                    "You are a screenplay tone analyzer. Given a scene, respond with ONLY a JSON object: "
+                    '{"mood": "tense"|"somber"|"uplifting"|"action", "confidence": 0.0-1.0}. '
+                    "No other text."
+                ),
             },
             {
                 "role": "user",
-                "content": f"What is the emotional tone of this scene?\n\n{text[:1500]}"
-            }
+                "content": f"What is the emotional tone of this scene?\n\n{truncated}",
+            },
         ],
-        "temperature": 0.1
+        "temperature": 0.1,
     }
 
     try:
@@ -104,10 +126,13 @@ def classify_mood_groq(text: str) -> Optional[MoodResult]:
         data = response.json()
         content = data["choices"][0]["message"]["content"].strip()
         parsed = json.loads(content)
+        mood = parsed.get("mood", "somber")
+        if mood not in ("tense", "somber", "uplifting", "action"):
+            mood = "somber"
         return MoodResult(
-            mood=parsed["mood"],
-            confidence=parsed.get("confidence", 0.0),
-            source="groq"
+            mood=mood,
+            confidence=parsed.get("confidence", 0.7),
+            source="groq",
         )
     except Exception as e:
         print(f"Groq classifier failed: {e}")

@@ -17,10 +17,19 @@ MOOD_MODIFIERS = {
     "surprise": "dramatic lighting shifts, dynamic angles, high contrast, sharp focus, wide framing",
 }
 
-STYLE_PREFIX = "cinematic storyboard frame, detailed color illustration, film pre-visualization style"
+STYLE_PREFIX = (
+    "cinematic storyboard illustration, 2D hand-drawn color art, visible ink linework and pencil sketch shading, "
+    "graphic novel panel style, NOT photorealistic, flat color fills with cross-hatching, "
+    "film pre-visualization sketch, warm muted color palette, consistent illustration art style"
+)
 
 
-def buildPrompt(visualSummary: str, mood: str, answers: Optional[Dict[str, str]] = None) -> str:
+def buildPrompt(
+    visualSummary: str,
+    mood: str,
+    answers: Optional[Dict[str, str]] = None,
+    reference_films: Optional[list[str]] = None,
+) -> str:
     parts = [STYLE_PREFIX]
 
     modifier = MOOD_MODIFIERS.get(mood.lower(), MOOD_MODIFIERS["neutral"])
@@ -32,10 +41,9 @@ def buildPrompt(visualSummary: str, mood: str, answers: Optional[Dict[str, str]]
         if answerDetails:
             parts.append(answerDetails)
 
-    return ", ".join(parts)
+    if reference_films:
+        films = ", ".join(f.strip() for f in reference_films if f and f.strip())
+        if films:
+            parts.append(f"cinematic influences: {films}")
 
-# prompt = buildPrompt(
-#     visualSummary="A dimly lit campus bar with two college students sitting at a small table",
-#     mood="neutral",
-#     answers={"lighting": "dim neon signs", "tables": "a few scattered tables"}
-# )
+    return ", ".join(parts)

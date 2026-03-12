@@ -23,16 +23,21 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+cors_origins = [o.strip() for o in settings.CORS_ORIGINS.split(",") if o.strip()]
+if settings.FRONTEND_URL and settings.FRONTEND_URL not in cors_origins:
+    cors_origins.append(settings.FRONTEND_URL)
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"], 
+    allow_origins=cors_origins or ["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 app.mount("/static/images", StaticFiles(directory=settings.STATIC_DIR), name="static")
 
-from app.routes import projects, scenes, export
+from app.routes import projects, scenes, export, auth
+app.include_router(auth.router, prefix="/api")
 app.include_router(projects.router, prefix="/api")
 app.include_router(scenes.router, prefix="/api")
 app.include_router(export.router, prefix="/api")

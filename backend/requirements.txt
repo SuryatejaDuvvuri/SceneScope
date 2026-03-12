@@ -9,8 +9,12 @@ requests
 python-multipart
 fpdf2
 transformers
+torch
 
 groq
 screenplay-tools
 stability-sdk
 replicate
+authlib
+python-jose[cryptography]
+itsdangerous

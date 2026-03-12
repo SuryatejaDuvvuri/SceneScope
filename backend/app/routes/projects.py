@@ -1,5 +1,5 @@
 import uuid
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Depends
 from app.db import get_db, to_json, from_json
 from app.models.project import ProjectCreate, ProjectResponse, ProjectSummary
 from app.models.scene import ScenesCreate, SceneResponse, SceneIterationResponse, DirectorNotes
@@ -8,17 +8,20 @@ from app.services.moodClassifier import classify_mood
 from app.services.sceneAnalyzer import analyzeScene
 from app.services.promptBuilder import buildPrompt
 from app.services.imageGenerator import generateImage
+from app.services.visualConsistency import extractVisualDetails, buildConsistencyPrompt
+from app.models.common import VisualContext
+from app.auth import get_current_user
 from screenplay_tools.fountain.parser import Parser
 
 router = APIRouter(tags=["projects"])
 
 @router.post("/projects", response_model=ProjectResponse)
-async def create_project(body: ProjectCreate):
+async def create_project(body: ProjectCreate, user: dict = Depends(get_current_user)):
     db = await get_db()
     project_id = uuid.uuid4().hex
     await db.execute(
-        "INSERT INTO projects (id, title, genre, time_period, tone, films) VALUES (?, ?, ?, ?, ?, ?)",
-        (project_id, body.title, body.genre, body.time_period, body.tone, to_json(body.films))
+        "INSERT INTO projects (id, user_id, title, genre, time_period, tone, films) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        (project_id, user["id"], body.title, body.genre, body.time_period, body.tone, to_json(body.films))
     )
     await db.commit()
     row = await db.execute("SELECT * FROM projects WHERE id = ?", (project_id,))
@@ -38,9 +41,12 @@ async def create_project(body: ProjectCreate):
 
 
 @router.get("/projects", response_model=list[ProjectSummary])
-async def list_projects():
+async def list_projects(user: dict = Depends(get_current_user)):
     db = await get_db()
-    rows = await db.execute("SELECT id, title, genre, created_at FROM projects ORDER BY created_at DESC")
+    rows = await db.execute(
+        "SELECT id, title, genre, created_at FROM projects WHERE user_id = ? ORDER BY created_at DESC",
+        (user["id"],),
+    )
     projects = await rows.fetchall()
     result = []
     for p in projects:
@@ -58,9 +64,9 @@ async def list_projects():
 
 
 @router.get("/projects/{project_id}", response_model=ProjectResponse)
-async def get_project(project_id: str):
+async def get_project(project_id: str, user: dict = Depends(get_current_user)):
     db = await get_db()
-    row = await db.execute("SELECT * FROM projects WHERE id = ?", (project_id,))
+    row = await db.execute("SELECT * FROM projects WHERE id = ? AND user_id = ?", (project_id, user["id"]))
     project = await row.fetchone()
     if not project:
         await db.close()
@@ -88,11 +94,11 @@ async def get_project(project_id: str):
 # ── Delete / Reset ──
 
 @router.delete("/projects/{project_id}")
-async def delete_project(project_id: str):
+async def delete_project(project_id: str, user: dict = Depends(get_current_user)):
     """Delete a project and all its scenes/iterations (CASCADE)."""
     db = await get_db()
     try:
-        row = await db.execute("SELECT id FROM projects WHERE id = ?", (project_id,))
+        row = await db.execute("SELECT id FROM projects WHERE id = ? AND user_id = ?", (project_id, user["id"]))
         if not await row.fetchone():
             raise HTTPException(status_code=404, detail="Project not found")
         await db.execute("DELETE FROM projects WHERE id = ?", (project_id,))
@@ -103,11 +109,11 @@ async def delete_project(project_id: str):
 
 
 @router.delete("/projects/{project_id}/scenes")
-async def reset_scenes(project_id: str):
+async def reset_scenes(project_id: str, user: dict = Depends(get_current_user)):
     """Delete all scenes for a project so the user can re-paste screenplay text."""
     db = await get_db()
     try:
-        row = await db.execute("SELECT id FROM projects WHERE id = ?", (project_id,))
+        row = await db.execute("SELECT id FROM projects WHERE id = ? AND user_id = ?", (project_id, user["id"]))
         if not await row.fetchone():
             raise HTTPException(status_code=404, detail="Project not found")
         await db.execute("DELETE FROM scenes WHERE project_id = ?", (project_id,))
@@ -120,12 +126,12 @@ async def reset_scenes(project_id: str):
 # ── Scenes Pipeline ──
 
 @router.post("/projects/{project_id}/scenes", response_model=list[SceneResponse])
-async def create_scenes(project_id: str, body: ScenesCreate):
+async def create_scenes(project_id: str, body: ScenesCreate, user: dict = Depends(get_current_user)):
     """The main pipeline: parse → classify mood → analyze → build prompt → generate sketch."""
     db = await get_db()
 
-    # Verify project exists
-    row = await db.execute("SELECT id FROM projects WHERE id = ?", (project_id,))
+    # Verify project exists and belongs to user
+    row = await db.execute("SELECT id, films FROM projects WHERE id = ? AND user_id = ?", (project_id, user["id"]))
     project = await row.fetchone()
     if not project:
         await db.close()
@@ -166,6 +172,7 @@ async def create_scenes(project_id: str, body: ScenesCreate):
     # Step 2-5: For each parsed scene, run the full pipeline
     scene_responses = []
     errors = []
+    location_cache: dict[str, str] = {}  # location_name -> visual description for cross-scene consistency
 
     for parsed in parsed_scenes:
         try:
@@ -179,11 +186,19 @@ async def create_scenes(project_id: str, body: ScenesCreate):
                 mood=mood_result.mood
             )
 
-            # Step 4: Build image prompt
+            # Step 4: Build image prompt (with cross-scene consistency when location was seen before)
+            consistency_suffix = ""
+            if location_cache:
+                ctx = VisualContext(characters={}, locations=location_cache, props={})
+                consistency_suffix = buildConsistencyPrompt(ctx)
+
             prompt = buildPrompt(
                 visualSummary=analysis.visualSummary,
-                mood=mood_result.mood
+                mood=mood_result.mood,
+                reference_films=from_json(project["films"]) or [],
             )
+            if consistency_suffix:
+                prompt += f", {consistency_suffix}"
 
             # Step 5: Generate sketch
             image = generateImage(prompt)
@@ -217,6 +232,23 @@ async def create_scenes(project_id: str, body: ScenesCreate):
 
             await db.commit()
 
+            # Extract visual details immediately — subsequent scenes in the same location will reuse them
+            try:
+                details = extractVisualDetails(
+                    heading=parsed.heading or "",
+                    description=parsed.description,
+                    visualSummary=analysis.visualSummary,
+                )
+                if details.get("locations"):
+                    await db.execute(
+                        "UPDATE scenes SET visual_context = ? WHERE id = ?",
+                        (to_json(details), scene_id)
+                    )
+                    await db.commit()
+                    location_cache.update(details["locations"])
+            except Exception as e:
+                print(f"Scene {parsed.sceneNumber} visual extraction failed: {e}")
+
             # Build response
             scene_row = await db.execute("SELECT * FROM scenes WHERE id = ?", (scene_id,))
             scene = await scene_row.fetchone()
@@ -242,6 +274,23 @@ async def create_scenes(project_id: str, body: ScenesCreate):
 
 async def _build_scene_response(db, scene) -> SceneResponse:
     """Build a SceneResponse from a DB row, including iterations."""
+    # Lazily re-classify scenes that have 0 confidence (created before the local model was wired up)
+    mood = scene["mood"]
+    mood_confidence = scene["mood_confidence"]
+    if (mood_confidence is None or mood_confidence == 0.0) and scene["description"]:
+        try:
+            result = classify_mood(scene["description"])
+            if result.confidence > 0:
+                await db.execute(
+                    "UPDATE scenes SET mood = ?, mood_confidence = ? WHERE id = ?",
+                    (result.mood, result.confidence, scene["id"])
+                )
+                await db.commit()
+                mood = result.mood
+                mood_confidence = result.confidence
+        except Exception as e:
+            print(f"Lazy mood re-classify failed: {e}")
+
     iter_rows = await db.execute(
         "SELECT * FROM scene_iterations WHERE scene_id = ? ORDER BY iteration_number",
         (scene["id"],)
@@ -274,8 +323,8 @@ async def _build_scene_response(db, scene) -> SceneResponse:
         scene_number=scene["scene_number"],
         heading=scene["heading"],
         description=scene["description"],
-        mood=scene["mood"],
-        mood_confidence=scene["mood_confidence"],
+        mood=mood,
+        mood_confidence=mood_confidence,
         vague_elements=from_json(scene["vague_elements"]) or [],
         clarifying_questions=from_json(scene["clarifying_questions"]) or [],
         visual_summary=scene["visual_summary"],

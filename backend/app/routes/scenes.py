@@ -8,7 +8,7 @@ This file handles everything AFTER initial creation.
 """
 
 import uuid
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Depends
 from app.db import get_db, to_json, from_json
 from app.models.scene import (
     RefineRequest, SceneResponse, SceneIterationResponse, DirectorNotes,
@@ -17,29 +17,59 @@ from app.models.scene import (
 from app.models.common import StructureAnalysis
 from app.services.promptBuilder import buildPrompt
 from app.services.imageGenerator import generateImage
+from app.services.moodClassifier import classify_mood
 from app.services.shotSuggester import suggest_shots
 from app.services.visualConsistency import extractVisualDetails, getProjectContext, buildConsistencyPrompt
 from app.services.structureAnalyzer import analyze_structure
 from app.services.directorAgent import consult_director, continue_consultation
 from app.services.sceneAnalyzer import generateRefinementQuestions
+from app.services.textSummary import summarize_to_chars
+from app.config import settings
+from app.auth import get_current_user
 
 router = APIRouter(tags=["scenes"])
 
 MAX_REFINEMENTS = 3
 
 
+async def _get_project_genre(db, project_id: str) -> str | None:
+    """Fetch the genre of a project for reference library lookups."""
+    row = await db.execute("SELECT genre FROM projects WHERE id = ?", (project_id,))
+    project = await row.fetchone()
+    return project["genre"] if project else None
+
+
+async def _get_project_films(db, project_id: str) -> list[str]:
+    row = await db.execute("SELECT films FROM projects WHERE id = ?", (project_id,))
+    project = await row.fetchone()
+    if not project:
+        return []
+    return from_json(project["films"]) or []
+
+
+async def _verify_scene_ownership(db, scene_id: str, user_id: str):
+    """Verify user owns the project that contains this scene. Returns scene row or raises 404."""
+    row = await db.execute(
+        """SELECT s.* FROM scenes s
+           JOIN projects p ON s.project_id = p.id
+           WHERE s.id = ? AND p.user_id = ?""",
+        (scene_id, user_id),
+    )
+    scene = await row.fetchone()
+    if not scene:
+        raise HTTPException(status_code=404, detail="Scene not found")
+    return scene
+
+
 # ── Refinement Loop ──
 
 @router.post("/scenes/{scene_id}/refine", response_model=SceneResponse)
-async def refine_scene(scene_id: str, body: RefineRequest):
+async def refine_scene(scene_id: str, body: RefineRequest, user: dict = Depends(get_current_user)):
     """Refine a scene: rebuild prompt with user answers + visual context, regenerate sketch."""
     db = await get_db()
     try:
-        # Fetch scene
-        row = await db.execute("SELECT * FROM scenes WHERE id = ?", (scene_id,))
-        scene = await row.fetchone()
-        if not scene:
-            raise HTTPException(status_code=404, detail="Scene not found")
+        # Fetch scene and verify ownership
+        scene = await _verify_scene_ownership(db, scene_id, user["id"])
         if scene["locked"]:
             raise HTTPException(status_code=400, detail="Scene is locked and cannot be refined")
 
@@ -59,20 +89,25 @@ async def refine_scene(scene_id: str, body: RefineRequest):
 
         # Get previous iteration's prompt for within-scene consistency
         prev_prompt = ""
+        prev_sketch_url = None
         if scene["current_iteration_id"]:
             prev_row = await db.execute(
-                "SELECT prompt_used FROM scene_iterations WHERE id = ?",
+                "SELECT prompt_used, sketch_url FROM scene_iterations WHERE id = ?",
                 (scene["current_iteration_id"],)
             )
             prev_iter = await prev_row.fetchone()
             if prev_iter:
                 prev_prompt = prev_iter["prompt_used"]
+                prev_sketch_url = prev_iter["sketch_url"]
+
+        project_films = await _get_project_films(db, scene["project_id"])
 
         # Use pre-confirmed director notes from /consult flow, or consult on the fly
         director_notes = None
         if body.director_notes:
             director_notes = body.director_notes
         elif body.feedback:
+            genre = await _get_project_genre(db, scene["project_id"])
             director_notes = consult_director(
                 heading=scene["heading"] or "",
                 description=scene["description"],
@@ -81,6 +116,7 @@ async def refine_scene(scene_id: str, body: RefineRequest):
                 feedback=body.feedback,
                 answers=body.answers,
                 consistency_context=consistencySuffix,
+                genre=genre,
             )
 
         # Rebuild prompt with user answers + director's interpretation
@@ -88,6 +124,7 @@ async def refine_scene(scene_id: str, body: RefineRequest):
             visualSummary=scene["visual_summary"] or "",
             mood=scene["mood"] or "neutral",
             answers=body.answers,
+            reference_films=project_films,
         )
 
         # Append director's refined prompt modifier (or raw feedback as fallback)
@@ -106,24 +143,27 @@ async def refine_scene(scene_id: str, body: RefineRequest):
             # (strip the style prefix and mood modifier, keep scene-specific content)
             # to give the image generator real context about what to maintain
             core_prev = prev_prompt
-            # Remove common prefixes that aren't scene-specific
-            for prefix in [
-                "cinematic storyboard frame, detailed color illustration, film pre-visualization style, ",
-            ]:
-                if core_prev.startswith(prefix):
-                    core_prev = core_prev[len(prefix):]
-            # Truncate to keep only the most important visual details (first ~400 chars)
-            if len(core_prev) > 400:
-                cut = core_prev[:400].rfind(",")
-                if cut > 200:
-                    core_prev = core_prev[:cut]
-                else:
-                    core_prev = core_prev[:400]
+            # Remove the style prefix that isn't scene-specific
+            from app.services.promptBuilder import STYLE_PREFIX
+            if core_prev.startswith(STYLE_PREFIX):
+                core_prev = core_prev[len(STYLE_PREFIX):].lstrip(", ")
+            core_prev = summarize_to_chars(
+                core_prev,
+                400,
+                focus_text=f"{scene['heading'] or ''} {scene['mood'] or ''} visual continuity",
+            )
             prompt += f", IMPORTANT - match previous frame: {core_prev}"
-            prompt += ", maintain exact same character appearances, setting layout, camera angle, color palette, and art style as previous iteration"
+            prompt += ", maintain exact same character appearances, setting layout, architecture, camera angle, color palette, and art style as previous iteration. Only apply the requested refinements, do not change anything else"
 
         # Generate new sketch
-        image = generateImage(prompt)
+        reference_image_url = None
+        if prev_sketch_url:
+            # If backend URL is configured publicly, providers can use this image as conditioning input.
+            base = getattr(settings, "BACKEND_PUBLIC_URL", "").rstrip("/")
+            if base:
+                reference_image_url = f"{base}{prev_sketch_url}"
+
+        image = generateImage(prompt, reference_image_url=reference_image_url)
 
         # Save iteration to DB
         iteration_id = uuid.uuid4().hex
@@ -148,7 +188,7 @@ async def refine_scene(scene_id: str, body: RefineRequest):
         if next_iteration < MAX_REFINEMENTS:
             try:
                 prev_questions = from_json(scene["clarifying_questions"]) or []
-                print(f"🔄 Generating new questions for iteration {next_iteration + 1} (prev had {len(prev_questions)} questions)")
+                print(f"Generating new questions for iteration {next_iteration + 1} (prev had {len(prev_questions)} questions)")
                 new_questions = generateRefinementQuestions(
                     heading=scene["heading"] or "",
                     description=scene["description"],
@@ -160,7 +200,7 @@ async def refine_scene(scene_id: str, body: RefineRequest):
                     iteration_number=next_iteration,
                 )
                 if new_questions:
-                    print(f"✅ Generated {len(new_questions)} new clarifying questions")
+                    print(f"Generated {len(new_questions)} new clarifying questions")
                     for q in new_questions:
                         print(f"   → {q.get('question', '')[:80]}")
                     await db.execute(
@@ -168,40 +208,35 @@ async def refine_scene(scene_id: str, body: RefineRequest):
                         (to_json(new_questions), scene_id)
                     )
                 else:
-                    print("⚠️  generateRefinementQuestions returned empty list")
+                    print("Refinement Questions returned empty list")
             except Exception as e:
                 import traceback
-                print(f"❌ Failed to generate refinement questions: {e}")
+                print(f"Failed to generate refinement questions: {e}")
                 traceback.print_exc()
         else:
-            print(f"ℹ️  Skipping question generation: iteration {next_iteration} >= MAX_REFINEMENTS {MAX_REFINEMENTS}")
+            print(f"Skipping question generation: iteration {next_iteration} >= MAX_REFINEMENTS {MAX_REFINEMENTS}")
 
         await db.commit()
 
-        # Return updated scene
+
         scene_row = await db.execute("SELECT * FROM scenes WHERE id = ?", (scene_id,))
         updated_scene = await scene_row.fetchone()
         return await _build_scene_response(db, updated_scene)
     finally:
         await db.close()
 
-
-# ── Director Consultation ──
-
 @router.post("/scenes/{scene_id}/consult", response_model=ConsultResponse)
-async def consult_scene(scene_id: str, body: ConsultRequest):
+async def consult_scene(scene_id: str, body: ConsultRequest, user: dict = Depends(get_current_user)):
     """Start a conversation with the Director Agent about how to refine a scene."""
     db = await get_db()
     try:
-        row = await db.execute("SELECT * FROM scenes WHERE id = ?", (scene_id,))
-        scene = await row.fetchone()
-        if not scene:
-            raise HTTPException(status_code=404, detail="Scene not found")
+        scene = await _verify_scene_ownership(db, scene_id, user["id"])
         if scene["locked"]:
             raise HTTPException(status_code=400, detail="Scene is locked")
 
         context = await getProjectContext(scene["project_id"])
         consistencySuffix = buildConsistencyPrompt(context)
+        genre = await _get_project_genre(db, scene["project_id"])
 
         notes = consult_director(
             heading=scene["heading"] or "",
@@ -211,6 +246,7 @@ async def consult_scene(scene_id: str, body: ConsultRequest):
             feedback=body.feedback,
             answers=body.answers,
             consistency_context=consistencySuffix,
+            genre=genre,
         )
 
         return ConsultResponse(**notes)
@@ -219,16 +255,15 @@ async def consult_scene(scene_id: str, body: ConsultRequest):
 
 
 @router.post("/scenes/{scene_id}/consult/respond", response_model=ConsultResponse)
-async def consult_respond(scene_id: str, body: ConsultFollowUpRequest):
+async def consult_respond(scene_id: str, body: ConsultFollowUpRequest, user: dict = Depends(get_current_user)):
     """Continue the Director conversation after answering a follow-up question."""
     db = await get_db()
     try:
-        row = await db.execute("SELECT * FROM scenes WHERE id = ?", (scene_id,))
-        scene = await row.fetchone()
-        if not scene:
-            raise HTTPException(status_code=404, detail="Scene not found")
+        scene = await _verify_scene_ownership(db, scene_id, user["id"])
         if scene["locked"]:
             raise HTTPException(status_code=400, detail="Scene is locked")
+
+        genre = await _get_project_genre(db, scene["project_id"])
 
         notes = continue_consultation(
             heading=scene["heading"] or "",
@@ -237,6 +272,7 @@ async def consult_respond(scene_id: str, body: ConsultFollowUpRequest):
             visual_summary=scene["visual_summary"] or "",
             conversation_history=body.conversation_history,
             user_response=body.response,
+            genre=genre,
         )
 
         return ConsultResponse(**notes)
@@ -247,12 +283,11 @@ async def consult_respond(scene_id: str, body: ConsultFollowUpRequest):
 # ── Lock Scene ──
 
 @router.post("/scenes/{scene_id}/lock", response_model=SceneResponse)
-async def lock_scene(scene_id: str):
+async def lock_scene(scene_id: str, user: dict = Depends(get_current_user)):
     """Lock a scene and extract visual details for cross-scene consistency."""
     db = await get_db()
     try:
-        row = await db.execute("SELECT * FROM scenes WHERE id = ?", (scene_id,))
-        scene = await row.fetchone()
+        scene = await _verify_scene_ownership(db, scene_id, user["id"])
         if not scene:
             raise HTTPException(status_code=404, detail="Scene not found")
         if scene["locked"]:
@@ -280,12 +315,11 @@ async def lock_scene(scene_id: str):
 
 
 @router.post("/scenes/{scene_id}/unlock", response_model=SceneResponse)
-async def unlock_scene(scene_id: str):
+async def unlock_scene(scene_id: str, user: dict = Depends(get_current_user)):
     """Unlock a scene so it can be refined again."""
     db = await get_db()
     try:
-        row = await db.execute("SELECT * FROM scenes WHERE id = ?", (scene_id,))
-        scene = await row.fetchone()
+        scene = await _verify_scene_ownership(db, scene_id, user["id"])
         if not scene:
             raise HTTPException(status_code=404, detail="Scene not found")
         if not scene["locked"]:
@@ -307,11 +341,11 @@ async def unlock_scene(scene_id: str):
 # ── Structure Analysis ──
 
 @router.get("/projects/{project_id}/structure", response_model=StructureAnalysis)
-async def get_structure_analysis(project_id: str):
+async def get_structure_analysis(project_id: str, user: dict = Depends(get_current_user)):
     """Analyze the full screenplay structure: pacing, tension arcs, tonal shifts."""
     db = await get_db()
     try:
-        row = await db.execute("SELECT id FROM projects WHERE id = ?", (project_id,))
+        row = await db.execute("SELECT id FROM projects WHERE id = ? AND user_id = ?", (project_id, user["id"]))
         if not await row.fetchone():
             raise HTTPException(status_code=404, detail="Project not found")
 
@@ -340,9 +374,25 @@ async def get_structure_analysis(project_id: str):
 
 
 # ── Helper ──
-
 async def _build_scene_response(db, scene) -> SceneResponse:
     """Build a SceneResponse from a DB row, including iterations + shot suggestions."""
+    # Lazily re-classify scenes that have 0 confidence (created before the local model was wired up)
+    mood = scene["mood"]
+    mood_confidence = scene["mood_confidence"]
+    if (mood_confidence is None or mood_confidence == 0.0) and scene["description"]:
+        try:
+            result = classify_mood(scene["description"])
+            if result.confidence > 0:
+                await db.execute(
+                    "UPDATE scenes SET mood = ?, mood_confidence = ? WHERE id = ?",
+                    (result.mood, result.confidence, scene["id"])
+                )
+                await db.commit()
+                mood = result.mood
+                mood_confidence = result.confidence
+        except Exception as e:
+            print(f"Lazy mood re-classify failed: {e}")
+
     iter_rows = await db.execute(
         "SELECT * FROM scene_iterations WHERE scene_id = ? ORDER BY iteration_number",
         (scene["id"],)
@@ -370,8 +420,8 @@ async def _build_scene_response(db, scene) -> SceneResponse:
         current = next((i for i in iteration_responses if i.id == scene["current_iteration_id"]), None)
 
     shots = None
-    if scene["mood"]:
-        shots = suggest_shots(scene["mood"], scene["description"])
+    if mood:
+        shots = suggest_shots(mood, scene["description"])
 
     return SceneResponse(
         id=scene["id"],
@@ -379,8 +429,8 @@ async def _build_scene_response(db, scene) -> SceneResponse:
         scene_number=scene["scene_number"],
         heading=scene["heading"],
         description=scene["description"],
-        mood=scene["mood"],
-        mood_confidence=scene["mood_confidence"],
+        mood=mood,
+        mood_confidence=mood_confidence,
         vague_elements=from_json(scene["vague_elements"]) or [],
         clarifying_questions=from_json(scene["clarifying_questions"]) or [],
         visual_summary=scene["visual_summary"],

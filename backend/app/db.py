@@ -23,6 +23,29 @@ async def init_db():
             schema = SCHEMA_PATH.read_text()
             await db.executescript(schema)
             await db.commit()
+        else:
+            # Migrations: add users table and user_id column if missing
+            row = await db.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='users'")
+            if not await row.fetchone():
+                await db.execute("""
+                    CREATE TABLE IF NOT EXISTS users (
+                        id TEXT PRIMARY KEY,
+                        email TEXT NOT NULL UNIQUE,
+                        name TEXT,
+                        avatar_url TEXT,
+                        provider TEXT NOT NULL DEFAULT 'google',
+                        provider_id TEXT NOT NULL,
+                        created_at TEXT DEFAULT (datetime('now')),
+                        updated_at TEXT DEFAULT (datetime('now'))
+                    )
+                """)
+                await db.commit()
+            # Add user_id column to projects if missing
+            cols = await db.execute("PRAGMA table_info(projects)")
+            col_names = [c["name"] for c in await cols.fetchall()]
+            if "user_id" not in col_names:
+                await db.execute("ALTER TABLE projects ADD COLUMN user_id TEXT REFERENCES users(id)")
+                await db.commit()
     finally:
         await db.close()
 
