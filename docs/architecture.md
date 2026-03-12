@@ -5,7 +5,6 @@
 User (React) 
     → API (FastAPI) 
     → Prompt Builder 
-    → Amazon Nova APIs 
     → Generated Sketch 
     → Back to User
 ```
@@ -30,10 +29,6 @@ User (React)
 - Identifies vague elements
 - Generates clarifying questions
 - Assembles final image prompt with mood modifiers
-
-### Amazon Nova Integration
-- Nova 2 Lite: Scene analysis, mood extraction
-- Nova Canvas: Sketch generation
 
 ### Database (SQLite/PostgreSQL)
 - Projects, Characters, Scenes

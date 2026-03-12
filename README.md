@@ -207,6 +207,10 @@ npm run dev
 - Scene iterations store prompt history, answers, feedback, and provider output for auditability.
 - `docs/architecture.md` exists, but this README is intended to be the most up-to-date overview.
 
+
+## Dataset
+- Film Corpus 2.0
+
 ## Contributor
 
 - Suryateja Duvvuri (https://github.com/SuryatejaDuvvuri)
