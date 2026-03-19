@@ -4,6 +4,9 @@ AI-powered screenplay pre-visualization that helps writers and directors see wha
 
 SceneScope turns screenplay text into storyboard frames, asks clarifying visual questions, supports iterative refinement, and preserves visual continuity across scenes.
 
+## Demo
+https://github.com/user-attachments/assets/a05eea9b-a4b5-4744-a972-2e5abc3a589a
+
 ## Why This Exists
 
 Screenplay text is naturally ambiguous. A line like "a dark room" can be interpreted many ways by different collaborators.
