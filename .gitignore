@@ -1,19 +1,24 @@
-<<<<<<< HEAD
 __pycache__/
-.env
-node_modules/
-venv/
-*.db
-backend/static/images/
-.react-router/
-build/
-
-=======
 .DS_Store
 .env
-/node_modules/
+*.db
 
-# React Router
-/.react-router/
-/build/
->>>>>>> master
+# Python
+.venv/
+venv/
+backend/venv/
+**/__pycache__/
+
+# Node / React Router
+node_modules/
+frontend/node_modules/
+.react-router/
+frontend/.react-router/
+build/
+frontend/build/
+
+# Generated assets
+backend/static/images/
+
+# Cloudflare local state
+frontend/.wrangler/

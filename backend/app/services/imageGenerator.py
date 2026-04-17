@@ -186,31 +186,145 @@ def generateImageStability(prompt: str) -> Optional[ImageResult]:
     return ImageResult(filePath=filePath, source="stability")
 
 
+def generateImageFal(prompt: str, reference_image_url: str | None = None) -> Optional[ImageResult]:
+    """Generate an image using Flux Pro via fal.ai."""
+    if not settings.FAL_KEY:
+        raise RuntimeError("FAL_KEY not configured")
+
+    import fal_client
+
+    final_prompt = _prepare_prompt(prompt)
+
+    input_data = {
+        "prompt": final_prompt,
+        "image_size": {"width": 1024, "height": 576},
+        "num_images": 1,
+        "safety_tolerance": "5",
+    }
+
+    if reference_image_url:
+        input_data["image_url"] = reference_image_url
+        input_data["strength"] = 0.65  # 65% prompt influence, 35% reference
+
+    try:
+        os.environ["FAL_KEY"] = settings.FAL_KEY
+        result = fal_client.subscribe(
+            "fal-ai/flux-pro/v1.1",
+            arguments=input_data,
+            with_logs=False,
+        )
+
+        images = result.get("images", [])
+        if not images:
+            raise RuntimeError("Fal returned no images")
+
+        image_url = images[0]["url"]
+        img_response = requests.get(image_url, timeout=30)
+        img_response.raise_for_status()
+        filePath = saveImage(img_response.content, settings.STATIC_DIR)
+        return ImageResult(filePath=filePath, source="fal-flux-pro")
+    except Exception as e:
+        print(f"Fal Flux Pro failed: {e}")
+        raise
+
+
+def generateImageIdeogram(prompt: str, character_refs: list[dict] | None = None) -> Optional[ImageResult]:
+    """Generate an image using Ideogram API with optional character reference for consistency."""
+    if not settings.IDEOGRAM_API_KEY:
+        raise RuntimeError("IDEOGRAM_API_KEY not configured")
+
+    final_prompt = _prepare_prompt(prompt)
+
+    url = "https://api.ideogram.ai/generate"
+    headers = {
+        "Api-Key": settings.IDEOGRAM_API_KEY,
+        "Content-Type": "application/json",
+    }
+
+    payload = {
+        "image_request": {
+            "prompt": final_prompt,
+            "aspect_ratio": "ASPECT_16_9",
+            "model": "V_2",
+            "style_type": "DESIGN",
+            "negative_prompt": NEGATIVE_PROMPT,
+        }
+    }
+
+    # Add character references if available
+    if character_refs:
+        char_ref_images = []
+        for ref in character_refs:
+            if ref.get("image_url"):
+                char_ref_images.append({"url": ref["image_url"]})
+        if char_ref_images:
+            payload["image_request"]["character_reference"] = {
+                "character_images": char_ref_images[:4],  # API limit
+            }
+
+    try:
+        response = requests.post(url, headers=headers, json=payload, timeout=90)
+
+        if response.status_code == 401:
+            raise RuntimeError("Ideogram authentication failed (401). Check IDEOGRAM_API_KEY.")
+        if response.status_code >= 400:
+            try:
+                error_data = response.json()
+            except Exception:
+                error_data = response.text
+            raise RuntimeError(f"Ideogram API HTTP {response.status_code}: {error_data}")
+
+        data = response.json()
+        images = data.get("data", [])
+        if not images:
+            raise RuntimeError("Ideogram returned no images")
+
+        image_url = images[0].get("url")
+        if not image_url:
+            raise RuntimeError("Ideogram response missing image URL")
+
+        img_response = requests.get(image_url, timeout=30)
+        img_response.raise_for_status()
+        filePath = saveImage(img_response.content, settings.STATIC_DIR)
+        return ImageResult(filePath=filePath, source="ideogram")
+    except Exception as e:
+        print(f"Ideogram failed: {e}")
+        raise
+
+
 def _get_provider_order() -> list[str]:
     configured = [provider.strip().lower() for provider in settings.IMAGE_PROVIDER_ORDER.split(",") if provider.strip()]
-    valid = [provider for provider in configured if provider in {"stability", "replicate"}]
-    return valid or ["stability", "replicate"]
+    valid = [provider for provider in configured if provider in {"stability", "replicate", "fal", "ideogram"}]
+    return valid or ["fal", "stability", "replicate"]
 
 
-def generateImage(prompt: str, reference_image_url: str | None = None) -> ImageResult:
-    """Generate an image, optionally conditioning on a previous image URL for refinement."""
+def generateImage(prompt: str, reference_image_url: str | None = None, character_refs: list[dict] | None = None) -> ImageResult:
+    """Generate an image, optionally conditioning on a previous image URL for refinement.
+
+    When character_refs are available, Ideogram is tried first for character consistency.
+    """
     errors: list[str] = []
 
-    # When refining with a reference image, prioritize Replicate (supports img2img).
-    # Stability's core endpoint is text-only and would ignore the reference entirely.
+    providers = _get_provider_order()
+
+    # When character refs exist, try Ideogram first for consistency
+    if character_refs and "ideogram" not in providers:
+        providers = ["ideogram"] + providers
+
+    # When refining with a reference image, prioritize providers that support img2img
     if reference_image_url:
-        providers = [p for p in _get_provider_order() if p == "replicate"]
-        if not providers:
-            providers = ["replicate"]
-        # Keep other providers as text-only fallback
-        providers += [p for p in _get_provider_order() if p not in providers]
-    else:
-        providers = _get_provider_order()
+        img2img_providers = [p for p in providers if p in {"replicate", "fal", "ideogram"}]
+        text_only_providers = [p for p in providers if p not in img2img_providers]
+        providers = img2img_providers + text_only_providers
 
     for provider in providers:
         try:
             if provider == "stability":
                 result = generateImageStability(prompt)
+            elif provider == "fal":
+                result = generateImageFal(prompt, reference_image_url=reference_image_url)
+            elif provider == "ideogram":
+                result = generateImageIdeogram(prompt, character_refs=character_refs)
             else:
                 result = generateImageReplicate(prompt, reference_image_url=reference_image_url)
 

@@ -6,7 +6,7 @@ PDF storyboard export using fpdf2.
 
 import os
 import tempfile
-import urllib.request
+import unicodedata
 from fastapi import APIRouter, HTTPException, Depends
 from fastapi.responses import FileResponse
 from fpdf import FPDF
@@ -26,19 +26,62 @@ DEJAVU_BOLD = os.path.abspath(os.path.join(FONT_DIR, "DejaVuSans-Bold.ttf"))
 class StoryboardPDF(FPDF):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        # Add Unicode fonts
-        self.add_font("DejaVu", "", DEJAVU, uni=True)
-        self.add_font("DejaVu", "B", DEJAVU_BOLD, uni=True)
-        self.set_font("DejaVu", size=12)
+        # Prefer Unicode DejaVu fonts if available; otherwise fallback to built-in Helvetica.
+        self.base_font_family = "Helvetica"
+        self.supports_italic = True
+
+        if os.path.isfile(DEJAVU) and os.path.isfile(DEJAVU_BOLD):
+            self.add_font("DejaVu", "", DEJAVU, uni=True)
+            self.add_font("DejaVu", "B", DEJAVU_BOLD, uni=True)
+            self.base_font_family = "DejaVu"
+            # Only regular + bold are bundled; drop italic styles when DejaVu is active.
+            self.supports_italic = False
+        else:
+            print(
+                "Export font fallback: DejaVu TTF files not found. "
+                "Using Helvetica for PDF export."
+            )
+
+        self.set_pdf_font(size=12)
+
+    def set_pdf_font(self, style: str = "", size: int = 12):
+        safe_style = style
+        if not self.supports_italic:
+            safe_style = safe_style.replace("I", "")
+        self.set_font(self.base_font_family, safe_style, size)
+
+    def safe_text(self, text: str | None) -> str:
+        """Ensure text is compatible with fallback core fonts that are Latin-1 only."""
+        if text is None:
+            return ""
+        value = str(text)
+
+        # DejaVu supports Unicode directly.
+        if self.base_font_family == "DejaVu":
+            return value
+
+        substitutions = str.maketrans({
+            "—": "-",
+            "–": "-",
+            "‘": "'",
+            "’": "'",
+            "“": '"',
+            "”": '"',
+            "…": "...",
+            "\u00A0": " ",
+        })
+        value = value.translate(substitutions)
+        value = unicodedata.normalize("NFKD", value)
+        return value.encode("latin-1", "replace").decode("latin-1")
 
     def header(self):
-        self.set_font("DejaVu", "B", 14)
-        self.cell(0, 10, self.title, align="C", new_x="LMARGIN", new_y="NEXT")
+        self.set_pdf_font("B", 14)
+        self.cell(0, 10, self.safe_text(self.title), align="C", new_x="LMARGIN", new_y="NEXT")
         self.ln(4)
  
     def footer(self):
         self.set_y(-15)
-        self.set_font("DejaVu", "I", 8)
+        self.set_pdf_font("I", 8)
         self.cell(0, 10, f"Page {self.page_no()}/{{nb}}", align="C")
 
 
@@ -48,8 +91,8 @@ def _add_scene_page(pdf: StoryboardPDF, scene: dict, sketch_path: str | None):
 
     # Scene heading
     heading = scene["heading"] or f"Scene {scene['scene_number']}"
-    pdf.set_font("DejaVu", "B", 12)
-    pdf.cell(0, 8, f"Scene {scene['scene_number']}: {heading}", new_x="LMARGIN", new_y="NEXT")
+    pdf.set_pdf_font("B", 12)
+    pdf.cell(0, 8, pdf.safe_text(f"Scene {scene['scene_number']}: {heading}"), new_x="LMARGIN", new_y="NEXT")
     pdf.ln(2)
 
     # Sketch image
@@ -61,26 +104,26 @@ def _add_scene_page(pdf: StoryboardPDF, scene: dict, sketch_path: str | None):
 
     # Mood
     if scene["mood"]:
-        pdf.set_font("Helvetica", "B", 10)
-        pdf.cell(20, 6, "Mood: ")
-        pdf.set_font("Helvetica", "", 10)
+        pdf.set_pdf_font("B", 10)
+        pdf.cell(20, 6, pdf.safe_text("Mood: "))
+        pdf.set_pdf_font("", 10)
         confidence = scene["mood_confidence"] or 0
-        pdf.cell(0, 6, f"{scene['mood']} ({confidence:.0%})", new_x="LMARGIN", new_y="NEXT")
+        pdf.cell(0, 6, pdf.safe_text(f"{scene['mood']} ({confidence:.0%})"), new_x="LMARGIN", new_y="NEXT")
 
     # Description
     pdf.ln(2)
-    pdf.set_font("Helvetica", "B", 10)
-    pdf.cell(0, 6, "Description:", new_x="LMARGIN", new_y="NEXT")
-    pdf.set_font("Helvetica", "", 9)
-    pdf.multi_cell(0, 5, scene["description"][:500])
+    pdf.set_pdf_font("B", 10)
+    pdf.cell(0, 6, pdf.safe_text("Description:"), new_x="LMARGIN", new_y="NEXT")
+    pdf.set_pdf_font("", 9)
+    pdf.multi_cell(0, 5, pdf.safe_text(scene["description"][:500]))
 
     # Visual summary
     if scene["visual_summary"]:
         pdf.ln(2)
-        pdf.set_font("Helvetica", "B", 10)
-        pdf.cell(0, 6, "Visual Summary:", new_x="LMARGIN", new_y="NEXT")
-        pdf.set_font("Helvetica", "", 9)
-        pdf.multi_cell(0, 5, scene["visual_summary"][:300])
+        pdf.set_pdf_font("B", 10)
+        pdf.cell(0, 6, pdf.safe_text("Visual Summary:"), new_x="LMARGIN", new_y="NEXT")
+        pdf.set_pdf_font("", 9)
+        pdf.multi_cell(0, 5, pdf.safe_text(scene["visual_summary"][:300]))
 
 
 @router.get("/projects/{project_id}/export")

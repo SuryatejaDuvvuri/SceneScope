@@ -46,6 +46,44 @@ async def init_db():
             if "user_id" not in col_names:
                 await db.execute("ALTER TABLE projects ADD COLUMN user_id TEXT REFERENCES users(id)")
                 await db.commit()
+
+            # Add dialogue column to scenes if missing
+            cols = await db.execute("PRAGMA table_info(scenes)")
+            col_names = [c["name"] for c in await cols.fetchall()]
+            if "dialogue" not in col_names:
+                await db.execute("ALTER TABLE scenes ADD COLUMN dialogue TEXT")
+                await db.commit()
+
+            # Create scene_audio table if missing
+            row = await db.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='scene_audio'")
+            if not await row.fetchone():
+                await db.execute("""
+                    CREATE TABLE IF NOT EXISTS scene_audio (
+                        id TEXT PRIMARY KEY,
+                        scene_id TEXT NOT NULL REFERENCES scenes(id) ON DELETE CASCADE,
+                        audio_url TEXT NOT NULL,
+                        dialogue_data TEXT,
+                        total_duration_ms INTEGER,
+                        created_at TEXT DEFAULT (datetime('now'))
+                    )
+                """)
+                await db.commit()
+
+            # Create character_voices table if missing
+            row = await db.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='character_voices'")
+            if not await row.fetchone():
+                await db.execute("""
+                    CREATE TABLE IF NOT EXISTS character_voices (
+                        id TEXT PRIMARY KEY,
+                        project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+                        character_name TEXT NOT NULL,
+                        voice_id TEXT NOT NULL,
+                        voice_provider TEXT DEFAULT 'elevenlabs',
+                        created_at TEXT DEFAULT (datetime('now')),
+                        UNIQUE(project_id, character_name)
+                    )
+                """)
+                await db.commit()
     finally:
         await db.close()
 

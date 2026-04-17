@@ -1,6 +1,7 @@
 import requests
 import json
 import re
+import uuid
 from typing import Optional
 from app.config import settings
 from app.models.common import VisualContext
@@ -116,3 +117,41 @@ def buildConsistencyPrompt(context: VisualContext) -> str:
         combined = combined[:200].rsplit(".", 1)[0]
 
     return f"Visual continuity: {combined}"
+
+
+async def save_character_reference(project_id: str, character_name: str, image_url: str, description: str):
+    """Save or update a character's reference image when a scene is locked."""
+    db = await get_db()
+    try:
+        row = await db.execute(
+            "SELECT id FROM characters WHERE project_id = ? AND name = ?",
+            (project_id, character_name)
+        )
+        existing = await row.fetchone()
+        if existing:
+            await db.execute(
+                "UPDATE characters SET image_url = ?, description = ?, updated_at = datetime('now') WHERE id = ?",
+                (image_url, description, existing["id"])
+            )
+        else:
+            char_id = uuid.uuid4().hex
+            await db.execute(
+                "INSERT INTO characters (id, project_id, name, description, image_url, created_at, updated_at) VALUES (?, ?, ?, ?, ?, datetime('now'), datetime('now'))",
+                (char_id, project_id, character_name, description, image_url)
+            )
+        await db.commit()
+    finally:
+        await db.close()
+
+
+async def get_character_references(project_id: str) -> list[dict]:
+    """Get all character reference images for a project."""
+    db = await get_db()
+    try:
+        rows = await db.execute(
+            "SELECT name, description, image_url FROM characters WHERE project_id = ? AND image_url IS NOT NULL",
+            (project_id,)
+        )
+        return [dict(r) for r in await rows.fetchall()]
+    finally:
+        await db.close()

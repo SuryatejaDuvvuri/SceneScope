@@ -8,7 +8,7 @@ from app.services.moodClassifier import classify_mood
 from app.services.sceneAnalyzer import analyzeScene
 from app.services.promptBuilder import buildPrompt
 from app.services.imageGenerator import generateImage
-from app.services.visualConsistency import extractVisualDetails, buildConsistencyPrompt
+from app.services.visualConsistency import extractVisualDetails, buildConsistencyPrompt, get_character_references
 from app.models.common import VisualContext
 from app.auth import get_current_user
 from screenplay_tools.fountain.parser import Parser
@@ -142,9 +142,12 @@ async def create_scenes(project_id: str, body: ScenesCreate, user: dict = Depend
     fountain_parser.add_text(body.text)
 
     parsed_scenes = []
+    scene_dialogues = []  # parallel list: dialogue lines per scene
     scene_number = 1
     current_heading = None
     description_lines = []
+    dialogue_lines = []
+    current_speaker = None
     collecting_description = False
     has_heading = False
 
@@ -154,27 +157,47 @@ async def create_scenes(project_id: str, body: ScenesCreate, user: dict = Depend
             has_heading = True
             if current_heading is not None:
                 parsed_scenes.append(buildScene(scene_number, current_heading, description_lines))
+                scene_dialogues.append(dialogue_lines)
                 scene_number += 1
             current_heading = element.text
             description_lines = []
+            dialogue_lines = []
+            current_speaker = None
             collecting_description = True
         elif el_type == "Action":
             if collecting_description or not has_heading:
                 description_lines.append(element.text)
-        elif el_type in ("Dialogue", "Character", "Parenthetical", "Transition"):
+        elif el_type == "Character":
+            current_speaker = element.text.strip()
+            collecting_description = False
+        elif el_type == "Dialogue":
+            dialogue_lines.append({
+                "character": current_speaker or "UNKNOWN",
+                "text": element.text.strip(),
+                "parenthetical": None,
+            })
+            collecting_description = False
+        elif el_type == "Parenthetical":
+            # Attach to the last dialogue line for the current speaker
+            if dialogue_lines and dialogue_lines[-1]["character"] == current_speaker:
+                dialogue_lines[-1]["parenthetical"] = element.text.strip()
+            collecting_description = False
+        elif el_type == "Transition":
             collecting_description = False
 
     if current_heading is not None:
         parsed_scenes.append(buildScene(scene_number, current_heading, description_lines))
+        scene_dialogues.append(dialogue_lines)
     elif not has_heading and description_lines:
         parsed_scenes.append(buildScene(1, None, description_lines))
+        scene_dialogues.append(dialogue_lines)
 
     # Step 2-5: For each parsed scene, run the full pipeline
     scene_responses = []
     errors = []
     location_cache: dict[str, str] = {}  # location_name -> visual description for cross-scene consistency
 
-    for parsed in parsed_scenes:
+    for idx, parsed in enumerate(parsed_scenes):
         try:
             # Step 2: Classify mood
             mood_result = classify_mood(parsed.description)
@@ -200,19 +223,21 @@ async def create_scenes(project_id: str, body: ScenesCreate, user: dict = Depend
             if consistency_suffix:
                 prompt += f", {consistency_suffix}"
 
-            # Step 5: Generate sketch
-            image = generateImage(prompt)
+            # Step 5: Generate sketch (with character refs from previously processed scenes)
+            char_refs = await get_character_references(project_id)
+            image = generateImage(prompt, character_refs=char_refs or None)
 
-            # Save scene to DB
+            # Save scene to DB (including dialogue if present)
             scene_id = uuid.uuid4().hex
+            scene_dialogue = scene_dialogues[idx] if idx < len(scene_dialogues) else []
             await db.execute(
                 """INSERT INTO scenes (id, project_id, scene_number, heading, description,
-                   mood, mood_confidence, vague_elements, clarifying_questions, visual_summary)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                   mood, mood_confidence, vague_elements, clarifying_questions, visual_summary, dialogue)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (scene_id, project_id, parsed.sceneNumber, parsed.heading, parsed.description,
                  mood_result.mood, mood_result.confidence,
                  to_json(analysis.vagueElements), to_json(analysis.clarifyingQuestions),
-                 analysis.visualSummary)
+                 analysis.visualSummary, to_json(scene_dialogue) if scene_dialogue else None)
             )
 
             # Save first iteration

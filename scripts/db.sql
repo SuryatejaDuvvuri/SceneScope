@@ -38,6 +38,7 @@ CREATE TABLE IF NOT EXISTS scenes (
     current_iteration_id TEXT,
     locked INTEGER DEFAULT 0,    -- 0 = unlocked, 1 = locked
     visual_context TEXT,         -- JSON: extracted characters/locations/props for consistency
+    dialogue TEXT,               -- JSON array: [{character, text, parenthetical}]
     created_at TEXT DEFAULT (datetime('now')),
     updated_at TEXT DEFAULT (datetime('now'))
 );
@@ -65,6 +66,25 @@ CREATE TABLE IF NOT EXISTS characters (
     image_url TEXT,
     created_at TEXT DEFAULT (datetime('now')),
     updated_at TEXT DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS scene_audio (
+    id TEXT PRIMARY KEY,
+    scene_id TEXT NOT NULL REFERENCES scenes(id) ON DELETE CASCADE,
+    audio_url TEXT NOT NULL,
+    dialogue_data TEXT,          -- JSON: the dialogue lines used for generation
+    total_duration_ms INTEGER,
+    created_at TEXT DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS character_voices (
+    id TEXT PRIMARY KEY,
+    project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    character_name TEXT NOT NULL,
+    voice_id TEXT NOT NULL,
+    voice_provider TEXT DEFAULT 'elevenlabs',
+    created_at TEXT DEFAULT (datetime('now')),
+    UNIQUE(project_id, character_name)
 );
 
 CREATE INDEX IF NOT EXISTS idx_projects_user_id ON projects(user_id);

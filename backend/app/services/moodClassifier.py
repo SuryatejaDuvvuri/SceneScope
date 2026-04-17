@@ -29,6 +29,9 @@ HF_GENERIC_MODEL = "j-hartmann/emotion-english-distilroberta-base"
 HF_GENERIC_URL = f"https://router.huggingface.co/hf-inference/models/{HF_GENERIC_MODEL}"
 
 # Map the generic model's 7 emotions → our mood labels
+# Note: generic model has no "romantic" class; "joy" in dialogue-heavy intimate scenes may
+# actually be romantic, but we can't distinguish without context — treat joy as uplifting.
+# "surprise" defaults to uplifting rather than tense (most surprises in context are positive).
 EMOTION_TO_MOOD = {
     "anger": "tense",
     "disgust": "somber",
@@ -36,7 +39,7 @@ EMOTION_TO_MOOD = {
     "joy": "uplifting",
     "neutral": "somber",
     "sadness": "somber",
-    "surprise": "tense",
+    "surprise": "uplifting",  # changed: surprise reunions/reveals are more often uplifting than tense
 }
 
 
@@ -108,14 +111,22 @@ def classify_mood_groq(text: str) -> Optional[MoodResult]:
             {
                 "role": "system",
                 "content": (
-                    "You are a screenplay tone analyzer. Given a scene, respond with ONLY a JSON object: "
-                    '{"mood": "tense"|"somber"|"uplifting"|"action", "confidence": 0.0-1.0}. '
-                    "No other text."
+                    "You are an expert screenplay tone analyst. Classify the dominant emotional tone of a scene into EXACTLY one of these moods:\n"
+                    "- tense: fear, danger, confrontation, pressure, paranoia, threat\n"
+                    "- somber: grief, loss, isolation, despair, regret, melancholy\n"
+                    "- uplifting: triumph, hope, joy, breakthrough, celebration, relief\n"
+                    "- romantic: intimacy, longing, attraction, love, tenderness, desire\n"
+                    "- action: urgency, movement, chase, combat, high energy, physical conflict\n\n"
+                    "Critical: read the SUBTEXT, not just surface words. A quiet dinner scene between two people who clearly want each other = romantic. "
+                    "A character walking alone past a happy crowd = somber (isolation). "
+                    "A tense negotiation with polite words = tense. "
+                    "Trust what the scene is emotionally doing, not what characters literally say.\n\n"
+                    'Respond with ONLY a JSON object: {"mood": "<mood>", "confidence": 0.0-1.0}. No other text.'
                 ),
             },
             {
                 "role": "user",
-                "content": f"What is the emotional tone of this scene?\n\n{truncated}",
+                "content": f"Classify the emotional tone of this scene:\n\n{truncated}",
             },
         ],
         "temperature": 0.1,
@@ -127,7 +138,7 @@ def classify_mood_groq(text: str) -> Optional[MoodResult]:
         content = data["choices"][0]["message"]["content"].strip()
         parsed = json.loads(content)
         mood = parsed.get("mood", "somber")
-        if mood not in ("tense", "somber", "uplifting", "action"):
+        if mood not in ("tense", "somber", "uplifting", "action", "romantic"):
             mood = "somber"
         return MoodResult(
             mood=mood,

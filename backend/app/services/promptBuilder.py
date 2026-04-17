@@ -4,6 +4,7 @@ MOOD_MODIFIERS = {
     # Primary moods (from fine-tuned model)
     "tense": "deep shadows, low-key lighting, tight framing, cold blue tones, dutch angles, high contrast",
     "somber": "desaturated cool tones, soft diffused lighting, isolated framing, empty space around subjects, muted palette",
+    "romantic": "warm soft lighting, shallow depth of field, intimate close framing, warm amber and rose tones, gentle bokeh, faces in close proximity",
     # Fallback moods (from generic emotion model via EMOTION_TO_MOOD mapping)
     "uplifting": "warm golden lighting, open composition, bright and saturated colors, wide shots",
     "action": "dynamic angles, motion blur, dramatic lighting, wide framing, high energy composition",

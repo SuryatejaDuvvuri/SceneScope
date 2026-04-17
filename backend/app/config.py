@@ -16,7 +16,14 @@ class Settings(BaseSettings):
     HF_MODEL_ID: str = "your-username/scenescope-mood-classifier"
     DATABASE_PATH: str = "./scenescope.db"
     STATIC_DIR: str = "./static/images"
+    AUDIO_DIR: str = "./static/audio"
     GROQ_MODEL: str = "llama-3.1-8b-instant"
+
+    # Image Generation
+    IDEOGRAM_API_KEY: str = ""
+
+    # Audio / TTS
+    ELEVENLABS_API_KEY: str = ""
 
     # OAuth / Auth
     GOOGLE_CLIENT_ID: str = ""

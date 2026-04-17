@@ -13,6 +13,7 @@ from app.db import init_db
 async def lifespan(app: FastAPI):
     await init_db()
     Path(settings.STATIC_DIR).mkdir(parents=True, exist_ok=True)
+    Path(settings.AUDIO_DIR).mkdir(parents=True, exist_ok=True)
     yield
 
 
@@ -35,12 +36,14 @@ app.add_middleware(
     allow_headers=["*"],
 )
 app.mount("/static/images", StaticFiles(directory=settings.STATIC_DIR), name="static")
+app.mount("/static/audio", StaticFiles(directory=settings.AUDIO_DIR), name="audio_static")
 
-from app.routes import projects, scenes, export, auth
+from app.routes import projects, scenes, export, auth, audio
 app.include_router(auth.router, prefix="/api")
 app.include_router(projects.router, prefix="/api")
 app.include_router(scenes.router, prefix="/api")
 app.include_router(export.router, prefix="/api")
+app.include_router(audio.router, prefix="/api")
 
 @app.get("/api/health")
 async def health_check():

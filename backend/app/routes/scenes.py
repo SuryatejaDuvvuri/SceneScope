@@ -19,7 +19,7 @@ from app.services.promptBuilder import buildPrompt
 from app.services.imageGenerator import generateImage
 from app.services.moodClassifier import classify_mood
 from app.services.shotSuggester import suggest_shots
-from app.services.visualConsistency import extractVisualDetails, getProjectContext, buildConsistencyPrompt
+from app.services.visualConsistency import extractVisualDetails, getProjectContext, buildConsistencyPrompt, save_character_reference, get_character_references
 from app.services.structureAnalyzer import analyze_structure
 from app.services.directorAgent import consult_director, continue_consultation
 from app.services.sceneAnalyzer import generateRefinementQuestions
@@ -108,6 +108,12 @@ async def refine_scene(scene_id: str, body: RefineRequest, user: dict = Depends(
             director_notes = body.director_notes
         elif body.feedback:
             genre = await _get_project_genre(db, scene["project_id"])
+            # Gather previous iteration history so director knows what's been tried
+            history_rows = await db.execute(
+                "SELECT iteration_number, feedback, director_notes FROM scene_iterations WHERE scene_id = ? ORDER BY iteration_number",
+                (scene_id,)
+            )
+            iteration_history = [dict(r) for r in await history_rows.fetchall()]
             director_notes = consult_director(
                 heading=scene["heading"] or "",
                 description=scene["description"],
@@ -117,6 +123,7 @@ async def refine_scene(scene_id: str, body: RefineRequest, user: dict = Depends(
                 answers=body.answers,
                 consistency_context=consistencySuffix,
                 genre=genre,
+                iteration_history=iteration_history,
             )
 
         # Rebuild prompt with user answers + director's interpretation
@@ -163,7 +170,9 @@ async def refine_scene(scene_id: str, body: RefineRequest, user: dict = Depends(
             if base:
                 reference_image_url = f"{base}{prev_sketch_url}"
 
-        image = generateImage(prompt, reference_image_url=reference_image_url)
+        # Fetch character references for visual consistency
+        char_refs = await get_character_references(scene["project_id"])
+        image = generateImage(prompt, reference_image_url=reference_image_url, character_refs=char_refs or None)
 
         # Save iteration to DB
         iteration_id = uuid.uuid4().hex
@@ -307,6 +316,22 @@ async def lock_scene(scene_id: str, user: dict = Depends(get_current_user)):
         )
         await db.commit()
 
+        # Save character reference images for visual consistency across scenes
+        if details.get("characters") and scene["current_iteration_id"]:
+            iter_row = await db.execute(
+                "SELECT sketch_url FROM scene_iterations WHERE id = ?",
+                (scene["current_iteration_id"],)
+            )
+            current_iter = await iter_row.fetchone()
+            if current_iter and current_iter["sketch_url"]:
+                base_url = (settings.BACKEND_PUBLIC_URL or "").rstrip("/")
+                if base_url:
+                    for char_name, char_desc in details["characters"].items():
+                        full_url = f"{base_url}{current_iter['sketch_url']}"
+                        await save_character_reference(
+                            scene["project_id"], char_name, full_url, char_desc
+                        )
+
         scene_row = await db.execute("SELECT * FROM scenes WHERE id = ?", (scene_id,))
         updated_scene = await scene_row.fetchone()
         return await _build_scene_response(db, updated_scene)
@@ -423,6 +448,14 @@ async def _build_scene_response(db, scene) -> SceneResponse:
     if mood:
         shots = suggest_shots(mood, scene["description"])
 
+    # Parse dialogue if available
+    dialogue = []
+    try:
+        dialogue_raw = from_json(scene["dialogue"]) if scene["dialogue"] else []
+        dialogue = dialogue_raw or []
+    except Exception:
+        pass
+
     return SceneResponse(
         id=scene["id"],
         project_id=scene["project_id"],
@@ -434,6 +467,7 @@ async def _build_scene_response(db, scene) -> SceneResponse:
         vague_elements=from_json(scene["vague_elements"]) or [],
         clarifying_questions=from_json(scene["clarifying_questions"]) or [],
         visual_summary=scene["visual_summary"],
+        dialogue=dialogue,
         shot_suggestions=shots,
         current_iteration=current,
         iterations=iteration_responses,

@@ -73,6 +73,12 @@ class SceneIterationResponse(BaseModel):
     created_at: str
 
 
+class DialogueLine(BaseModel):
+    character: str
+    text: str
+    parenthetical: str | None = None
+
+
 class SceneResponse(BaseModel):
     id: str
     project_id: str
@@ -84,6 +90,7 @@ class SceneResponse(BaseModel):
     vague_elements: list[str]
     clarifying_questions: list[dict | str]
     visual_summary: str | None
+    dialogue: list[DialogueLine] = Field(default_factory=list)
     shot_suggestions: ShotSuggestions | None = None
     current_iteration: SceneIterationResponse | None = None
     iterations: list[SceneIterationResponse] = Field(default_factory=list)
