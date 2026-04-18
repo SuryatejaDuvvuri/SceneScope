@@ -21,11 +21,13 @@ MOOD_MODIFIERS = {
 # Medium anchor — set at the very top so the model commits to this style before
 # reading any scene content.
 STYLE_PREFIX = (
-    "2D illustrated storyboard keyframe, hand-painted production art, colored ink and watercolor wash, "
+    "2D illustrated storyboard keyframe, 16:9 widescreen cinematic frame, "
+    "hand-painted production art, colored ink and watercolor wash, "
+    "confident sketch not a polished illustration, "
     "mild graphic flattening — reads as drawn boards, not a photograph"
 )
 
-PROMPT_BUILDER_VERSION = "prompt-builder-v3"
+PROMPT_BUILDER_VERSION = "prompt-builder-v4"
 
 # Style reinforcement — repeated at the end to counteract any photorealism drift
 # introduced by long scene descriptions.
@@ -59,6 +61,7 @@ def buildPrompt(
     tone: Optional[str] = None,
     ambient_population_hint: Optional[str] = None,
     director_modifier: Optional[str] = None,
+    artist_brief: Optional[str] = None,
 ) -> str:
     """Compose the final image prompt for one storyboard keyframe.
 
@@ -98,6 +101,14 @@ def buildPrompt(
                 + ", ".join(clean_subjects[:5])
                 + "; do not generate an empty environment-only shot if named characters are present"
             )
+
+    # ── 4b. Artist's mental framing (pre-draw reasoning) ────────────────────────
+    # A human storyboard artist spends a few seconds reasoning about the scene
+    # before drawing: what this setting archetype typically looks like, who's in
+    # frame, the emotional beat, the implicit staging. We inject that same
+    # reasoning here so the model gets the same situational priming.
+    if artist_brief and artist_brief.strip():
+        parts.append(f"artist's mental framing: {artist_brief.strip()}")
 
     # ── 5. Scene content ─────────────────────────────────────────────────────────
     parts.append(visualSummary.strip())

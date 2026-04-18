@@ -268,6 +268,105 @@ def generateImageFal(
         raise
 
 
+def generateImageGemini(
+    prompt: str,
+    reference_image_url: str | None = None,
+    character_refs: list[dict] | None = None,
+    seed: Optional[int] = None,
+) -> Optional[ImageResult]:
+    """Generate an image using Google Gemini 2.5 Flash Image ("nano banana").
+
+    This is SceneScope's preferred provider because:
+      - Free tier via Google AI Studio (no credits needed)
+      - Strong character consistency — same faces/wardrobe across scenes when
+        reference portraits are passed as multi-part input
+      - Natural-language editing — fits SceneScope's refinement loop well
+      - Accepts both a previous-iteration sketch (img2img) AND character
+        portraits in the same multi-part request
+
+    Aspect ratio is NOT a parameter for this model — it's inferred from the
+    prompt. STYLE_PREFIX already contains "16:9 widescreen cinematic frame" so
+    every Gemini call ships with that hint baked in.
+    """
+    if not settings.GEMINI_API_KEY:
+        raise RuntimeError("GEMINI_API_KEY not configured")
+
+    try:
+        from google import genai
+        from google.genai import types as genai_types
+    except ImportError as e:
+        raise RuntimeError(
+            "google-genai SDK not installed. Add 'google-genai' to requirements.txt."
+        ) from e
+
+    final_prompt = _prepare_prompt(prompt)
+
+    # Build multi-part content: text prompt + optional reference image +
+    # optional character portraits. Gemini reads all of them when generating.
+    contents: list = [final_prompt]
+
+    def _fetch_image_part(url: str):
+        """Download an image and wrap it as a Gemini inline Part."""
+        resp = requests.get(url, timeout=20)
+        resp.raise_for_status()
+        mime = resp.headers.get("Content-Type", "image/png").split(";")[0].strip()
+        if not mime.startswith("image/"):
+            mime = "image/png"
+        return genai_types.Part.from_bytes(data=resp.content, mime_type=mime)
+
+    # Previous-iteration sketch (img2img refinement — within-scene continuity)
+    if reference_image_url:
+        try:
+            contents.append(_fetch_image_part(reference_image_url))
+        except Exception as e:
+            print(f"Gemini: failed to attach reference image, continuing text-only: {e}")
+
+    # Character portraits (cross-scene identity consistency)
+    if character_refs:
+        attached = 0
+        for ref in character_refs:
+            img_url = ref.get("image_url")
+            if not img_url:
+                continue
+            try:
+                contents.append(_fetch_image_part(img_url))
+                attached += 1
+                if attached >= 4:  # keep request payload reasonable
+                    break
+            except Exception as e:
+                print(f"Gemini: failed to attach character ref '{ref.get('name')}': {e}")
+
+    try:
+        client = genai.Client(api_key=settings.GEMINI_API_KEY)
+        response = client.models.generate_content(
+            model="gemini-2.5-flash-image",
+            contents=contents,
+        )
+
+        # Extract the first inline image part from the response
+        image_bytes: Optional[bytes] = None
+        for candidate in getattr(response, "candidates", []) or []:
+            content = getattr(candidate, "content", None)
+            if not content:
+                continue
+            for part in getattr(content, "parts", []) or []:
+                inline = getattr(part, "inline_data", None)
+                if inline and getattr(inline, "data", None):
+                    image_bytes = inline.data
+                    break
+            if image_bytes:
+                break
+
+        if not image_bytes:
+            raise RuntimeError("Gemini returned no image data")
+
+        filePath = saveImage(image_bytes, settings.STATIC_DIR)
+        return ImageResult(filePath=filePath, source="gemini-2.5-flash-image")
+    except Exception as e:
+        print(f"Gemini image generation failed: {e}")
+        raise
+
+
 def generateImageIdeogram(
     prompt: str,
     character_refs: list[dict] | None = None,
@@ -339,8 +438,8 @@ def generateImageIdeogram(
 
 def _get_provider_order() -> list[str]:
     configured = [provider.strip().lower() for provider in settings.IMAGE_PROVIDER_ORDER.split(",") if provider.strip()]
-    valid = [provider for provider in configured if provider in {"stability", "replicate", "fal", "ideogram"}]
-    return valid or ["fal", "stability", "replicate"]
+    valid = [provider for provider in configured if provider in {"stability", "replicate", "fal", "ideogram", "gemini"}]
+    return valid or ["gemini", "fal", "ideogram", "stability", "replicate"]
 
 
 def _pick_primary_character_ref(
@@ -399,22 +498,37 @@ def generateImage(
     errors: list[str] = []
     providers = _get_provider_order()
 
-    # Prefer Ideogram when we have character refs (it actually uses them).
-    if character_refs and "ideogram" not in providers:
-        providers = ["ideogram"] + providers
+    # Prefer Gemini when we have character refs — it reads multi-image input
+    # natively and keeps identity stable across scenes. Ideogram is the fallback
+    # character-ref provider if Gemini isn't available.
+    if character_refs:
+        for ref_first in ("gemini", "ideogram"):
+            if ref_first in providers:
+                providers = [ref_first] + [p for p in providers if p != ref_first]
+                break
 
     # When refining with a reference image, prioritize providers that actually
-    # support img2img. Ideogram has no img2img path — exclude it here so
-    # STRICT_REFERENCE_REFINEMENT doesn't silently pick Ideogram and drop
-    # the previous-frame conditioning.
+    # support img2img. Gemini, Fal, and Replicate accept image conditioning.
+    # Ideogram has no img2img path — exclude it so STRICT_REFERENCE_REFINEMENT
+    # doesn't silently pick Ideogram and drop the previous-frame conditioning.
     if reference_image_url:
-        img2img_providers = [p for p in providers if p in {"replicate", "fal"}]
+        img2img_providers = [p for p in providers if p in {"gemini", "replicate", "fal"}]
         text_only_providers = [p for p in providers if p not in img2img_providers]
         providers = img2img_providers if strict_reference_mode else (img2img_providers + text_only_providers)
 
     for provider in providers:
         try:
-            if provider == "stability":
+            if provider == "gemini":
+                # Gemini ("nano banana") takes text + optional reference sketch
+                # + optional character portraits as multi-part input. Strongest
+                # character consistency of any provider we support.
+                result = generateImageGemini(
+                    prompt,
+                    reference_image_url=reference_image_url,
+                    character_refs=character_refs,
+                    seed=seed,
+                )
+            elif provider == "stability":
                 result = generateImageStability(prompt, seed=seed)
             elif provider == "fal":
                 # Character identity on Fal is handled entirely via the text prompt
@@ -464,6 +578,10 @@ def generateCharacterPortrait(
 
     for provider in providers:
         try:
+            if provider == "gemini":
+                # Gemini infers aspect ratio from prompt — portrait prompt
+                # already says "head and shoulders", which it handles well.
+                return generateImageGemini(prompt, seed=seed)
             if provider == "fal":
                 return generateImageFal(prompt, seed=seed, width=768, height=1024)
             if provider == "stability":

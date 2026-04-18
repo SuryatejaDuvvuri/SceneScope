@@ -16,7 +16,7 @@ class Settings(BaseSettings):
     GEMINI_API_KEY: str = ""
     REPLICATE_API_TOKEN: str = ""
     REPLICATE_MODEL_VERSION: str = ""
-    IMAGE_PROVIDER_ORDER: str = "stability,replicate"
+    IMAGE_PROVIDER_ORDER: str = "gemini,fal,ideogram,stability,replicate"
     HUGGINGFACE_API_TOKEN: str = ""
     HF_MODEL_ID: str = "your-username/scenescope-mood-classifier"
     DATABASE_PATH: str = "./scenescope.db"

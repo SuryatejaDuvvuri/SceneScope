@@ -10,6 +10,7 @@ from app.services.sceneAnalyzer import analyzeScene
 from app.services.promptBuilder import buildPrompt, enrich_subjects_with_descriptions, PROMPT_BUILDER_VERSION
 from app.services.imageGenerator import generateImage
 from app.services.filmStyleExpander import expand_film_styles
+from app.services.artistBrief import build_artist_brief
 from app.config import settings
 from app.services.visualConsistency import (
     extractVisualDetails,
@@ -334,6 +335,11 @@ async def create_scenes(project_id: str, body: ScenesCreate, user: dict = Depend
             project_films = from_json(project["films"]) or []
             expanded_films = expand_film_styles(project_films) if project_films else []
 
+            # Pre-draw reasoning pass — the mental framing a human artist
+            # does before drawing. Injects setting archetype, implicit staging,
+            # and emotional beat into the prompt.
+            artist_brief = build_artist_brief(parsed.heading or "", parsed.description or "")
+
             prompt = buildPrompt(
                 visualSummary=analysis.visualSummary,
                 mood=mood_result.mood,
@@ -343,6 +349,7 @@ async def create_scenes(project_id: str, body: ScenesCreate, user: dict = Depend
                 time_period=project["time_period"],
                 tone=project["tone"],
                 ambient_population_hint=ambient_hint,
+                artist_brief=artist_brief,
             )
 
             # Step 5: Generate sketch with project-deterministic seed and

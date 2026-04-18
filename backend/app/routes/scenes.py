@@ -34,6 +34,7 @@ from app.services.structureAnalyzer import analyze_structure
 from app.services.directorAgent import consult_director, continue_consultation
 from app.services.sceneAnalyzer import generateRefinementQuestions
 from app.services.filmStyleExpander import expand_film_styles
+from app.services.artistBrief import build_artist_brief
 from app.services.usageLimits import enforce_daily_image_limit
 from app.config import settings
 from app.auth import get_current_user
@@ -236,6 +237,11 @@ async def refine_scene(scene_id: str, body: RefineRequest, user: dict = Depends(
         # "Dune" → "Dune (vast desert vistas, extreme wide shots, harsh backlit silhouettes, ...)"
         expanded_films = expand_film_styles(project_films) if project_films else []
 
+        # Pre-draw reasoning: the mental framing a human artist does before
+        # putting pencil to paper. Cached by (heading, description) so
+        # refinement iterations reuse it.
+        artist_brief = build_artist_brief(scene["heading"] or "", scene["description"] or "")
+
         # Director modifier is the single source of cinematic direction.
         # The director agent already interprets feedback into a prompt_modifier —
         # we don't need a second intent-parser layer on top of it.
@@ -254,6 +260,7 @@ async def refine_scene(scene_id: str, body: RefineRequest, user: dict = Depends(
             tone=project_tone,
             ambient_population_hint=ambient_hint,
             director_modifier=director_modifier,
+            artist_brief=artist_brief,
         )
 
         # Generate new sketch

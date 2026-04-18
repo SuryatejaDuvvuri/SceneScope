@@ -13,6 +13,7 @@ groq
 screenplay-tools
 replicate
 fal-client
+google-genai
 elevenlabs
 authlib
 python-jose[cryptography]
