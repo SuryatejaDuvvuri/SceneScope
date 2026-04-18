@@ -88,6 +88,75 @@ def _required_subjects(description: str, dialogue_lines: list[dict]) -> list[str
     return merged
 
 
+def _extract_dialogue_from_text(text: str) -> tuple[str, list[dict]]:
+    """Smart fallback: derive dialogue from raw screenplay text regardless of format.
+
+    A human reads a script and immediately knows:
+      - ALL CAPS short line (1-4 words, no punctuation that suggests action) → character name
+      - The next non-empty line(s) after that → what they say
+      - Everything else → action / scene description
+
+    This runs when the Fountain parser produces no structured dialogue (e.g. the
+    user pasted plain text, PDF rip, or non-standard Fountain). It does NOT
+    remove dialogue from the description — it returns extracted dialogue alongside
+    the original description so the scene context is preserved.
+    """
+    # Known non-character ALL-CAPS tokens to ignore
+    HEADING_TOKENS = {
+        "INT", "EXT", "INT./EXT", "EXT./INT", "DAY", "NIGHT", "MORNING",
+        "EVENING", "NOON", "DUSK", "DAWN", "LATER", "CONTINUOUS",
+        "CUT TO", "FADE IN", "FADE OUT", "SMASH CUT", "MATCH CUT",
+        "TITLE CARD", "SUPER", "INTERCUT", "BACK TO",
+    }
+
+    lines = text.split("\n")
+    dialogue_lines: list[dict] = []
+    current_speaker: str | None = None
+    pending_parenthetical: str | None = None
+    i = 0
+
+    while i < len(lines):
+        raw = lines[i]
+        stripped = raw.strip()
+
+        # Skip empty lines
+        if not stripped:
+            i += 1
+            continue
+
+        # Check if this line looks like a character cue:
+        #   - All uppercase (ignoring punctuation/extensions like (V.O.) (O.S.))
+        #   - 1-5 words
+        #   - Not a heading token
+        #   - Not a very long line (action lines can start with caps in TSN-style scripts)
+        clean_for_check = re.sub(r'\([^)]*\)', '', stripped).strip()  # remove (V.O.) etc
+        words = clean_for_check.split()
+        is_all_caps = clean_for_check == clean_for_check.upper() and any(c.isalpha() for c in clean_for_check)
+        is_short = 1 <= len(words) <= 5
+        is_heading = any(clean_for_check.startswith(tok) for tok in HEADING_TOKENS)
+        is_too_long = len(stripped) > 60  # action lines are usually longer
+
+        if is_all_caps and is_short and not is_heading and not is_too_long:
+            current_speaker = clean_for_check.strip()
+            pending_parenthetical = None
+        elif current_speaker:
+            # Parenthetical?
+            if stripped.startswith("(") and stripped.endswith(")"):
+                pending_parenthetical = stripped[1:-1].strip()
+            else:
+                # This is dialogue for the current speaker
+                dialogue_lines.append({
+                    "character": current_speaker,
+                    "text": stripped,
+                    "parenthetical": pending_parenthetical,
+                })
+                pending_parenthetical = None
+                current_speaker = None  # reset — next cue needed for next line
+        i += 1
+
+    return text, dialogue_lines
+
+
 def _ambient_population_hint(heading: str | None, description: str) -> str | None:
     """Return setting-aware extras hint so first output isn't unnaturally empty."""
     text = f"{heading or ''}\n{description}".lower()
@@ -282,6 +351,17 @@ async def create_scenes(project_id: str, body: ScenesCreate, user: dict = Depend
     elif not has_heading and description_lines:
         parsed_scenes.append(buildScene(1, None, description_lines))
         scene_dialogues.append(dialogue_lines)
+
+    # ── Smart dialogue fallback ─────────────────────────────────────────────────
+    # If the Fountain parser found no dialogue in a scene (e.g. user pasted plain
+    # text or a PDF rip), re-scan the raw description for UPPERCASE-name / dialogue
+    # patterns and patch in what we find. This way the user can paste any format
+    # and still get audio + character extraction.
+    for idx, (scene, dlg) in enumerate(zip(parsed_scenes, scene_dialogues)):
+        if not dlg:
+            _, fallback_dlg = _extract_dialogue_from_text(scene.description or "")
+            if fallback_dlg:
+                scene_dialogues[idx] = fallback_dlg
 
     # Usage controls: per-upload batch size, per-project cap, and daily image quota.
     enforce_upload_scene_limit(len(parsed_scenes))

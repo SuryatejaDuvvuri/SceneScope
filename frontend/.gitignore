@@ -1,0 +1,11 @@
+.DS_Store
+.env
+
+# Python
+__pycache__/
+venv/
+
+# Node / React Router
+node_modules/
+.react-router/
+build/
