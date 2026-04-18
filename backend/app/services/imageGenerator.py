@@ -22,8 +22,11 @@ class ImageResult:
 STABILITY_MAX_PROMPT_LENGTH = 1900  # Leave headroom under common 2k-char prompt limits.
 
 NEGATIVE_PROMPT = (
-    "photorealistic, photography, photo, realistic render, glossy render, 3d render, CGI, "
+    "photorealistic, photography, photo, DSLR, film still, documentary, magazine cover, "
+    "realistic render, glossy render, 3d render, CGI, uncanny valley, hyperreal skin, skin pores, "
     "hyper-detailed texture, subsurface scattering, ray tracing, physically based rendering, "
+    "celebrity likeness, recognizable public figure, face swap, "
+    "duplicate same person, cloned character, repeated identical face, twin leads, "
     "neon colors, black and white, monochrome, greyscale, "
     "empty room, no people, unpopulated scene"
 )

@@ -94,6 +94,22 @@ async def init_db():
                     )
                 """)
                 await db.commit()
+
+            # Add iteration traceability columns if missing
+            cols = await db.execute("PRAGMA table_info(scene_iterations)")
+            iter_cols = [c["name"] for c in await cols.fetchall()]
+            if iter_cols and "llm_model" not in iter_cols:
+                await db.execute("ALTER TABLE scene_iterations ADD COLUMN llm_model TEXT")
+                await db.commit()
+            if iter_cols and "planner_version" not in iter_cols:
+                await db.execute("ALTER TABLE scene_iterations ADD COLUMN planner_version TEXT")
+                await db.commit()
+            if iter_cols and "intent_parser_version" not in iter_cols:
+                await db.execute("ALTER TABLE scene_iterations ADD COLUMN intent_parser_version TEXT")
+                await db.commit()
+            if iter_cols and "prompt_builder_version" not in iter_cols:
+                await db.execute("ALTER TABLE scene_iterations ADD COLUMN prompt_builder_version TEXT")
+                await db.commit()
     finally:
         await db.close()
 

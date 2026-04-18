@@ -7,8 +7,10 @@ from app.models.scene import ScenesCreate, SceneResponse, SceneIterationResponse
 from app.services.parser import ParsedScene, buildScene, parseHeading
 from app.services.moodClassifier import classify_mood
 from app.services.sceneAnalyzer import analyzeScene
-from app.services.promptBuilder import buildPrompt
+from app.services.promptBuilder import buildPrompt, PROMPT_BUILDER_VERSION
 from app.services.imageGenerator import generateImage
+from app.services.scenePlanner import plan_scene_to_shot, SCENE_PLANNER_VERSION
+from app.config import settings
 from app.services.visualConsistency import (
     extractVisualDetails,
     buildConsistencyPrompt,
@@ -320,8 +322,25 @@ async def create_scenes(project_id: str, body: ScenesCreate, user: dict = Depend
             )
 
             scene_dialogue = scene_dialogues[idx] if idx < len(scene_dialogues) else []
-            required_subjects = _required_subjects(parsed.description, scene_dialogue)
-            ambient_hint = _ambient_population_hint(parsed.heading, parsed.description)
+            shot_plan = plan_scene_to_shot(
+                heading=parsed.heading or "UNKNOWN",
+                description=parsed.description,
+                mood=mood_result.mood,
+                visual_summary=analysis.visualSummary,
+                dialogue_lines=scene_dialogue,
+                time_period=project["time_period"],
+                tone=project["tone"],
+            )
+            required_subjects = shot_plan.required_subjects or _required_subjects(parsed.description, scene_dialogue)
+            ambient_hint = shot_plan.ambient_population_hint or _ambient_population_hint(parsed.heading, parsed.description)
+            planning_directives = [
+                shot_plan.setting_direction,
+                shot_plan.camera_direction,
+                shot_plan.blocking_direction,
+                shot_plan.lighting_direction,
+                *shot_plan.continuity_constraints,
+                *shot_plan.negative_constraints,
+            ]
 
             prompt = buildPrompt(
                 visualSummary=analysis.visualSummary,
@@ -329,6 +348,7 @@ async def create_scenes(project_id: str, body: ScenesCreate, user: dict = Depend
                 reference_films=from_json(project["films"]) or [],
                 consistency=consistency_suffix or None,
                 required_subjects=required_subjects or None,
+                planning_directives=planning_directives,
                 time_period=project["time_period"],
                 tone=project["tone"],
                 ambient_population_hint=ambient_hint,
@@ -360,9 +380,21 @@ async def create_scenes(project_id: str, body: ScenesCreate, user: dict = Depend
             iteration_id = uuid.uuid4().hex
             sketch_url = f"/static/images/{image.filePath.split('/')[-1]}"
             await db.execute(
-                """INSERT INTO scene_iterations (id, scene_id, iteration_number, prompt_used, sketch_url, image_provider)
-                   VALUES (?, ?, ?, ?, ?, ?)""",
-                (iteration_id, scene_id, 1, prompt, sketch_url, image.source)
+                """INSERT INTO scene_iterations
+                   (id, scene_id, iteration_number, prompt_used, sketch_url, image_provider, llm_model, planner_version, intent_parser_version, prompt_builder_version)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    iteration_id,
+                    scene_id,
+                    1,
+                    prompt,
+                    sketch_url,
+                    image.source,
+                    settings.GROQ_MODEL,
+                    SCENE_PLANNER_VERSION,
+                    None,
+                    PROMPT_BUILDER_VERSION,
+                )
             )
 
             # Link iteration to scene
@@ -455,6 +487,10 @@ async def _build_scene_response(db, scene) -> SceneResponse:
             sketch_url=it["sketch_url"],
             image_provider=it["image_provider"],
             director_notes=notes,
+            llm_model=it["llm_model"] if "llm_model" in it.keys() else None,
+            planner_version=it["planner_version"] if "planner_version" in it.keys() else None,
+            intent_parser_version=it["intent_parser_version"] if "intent_parser_version" in it.keys() else None,
+            prompt_builder_version=it["prompt_builder_version"] if "prompt_builder_version" in it.keys() else None,
             created_at=it["created_at"]
         ))
 

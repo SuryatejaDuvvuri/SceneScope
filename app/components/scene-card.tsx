@@ -1,4 +1,5 @@
 import type { Scene } from "~/lib/types";
+import { publicBackendUrl } from "~/lib/publicUrl";
 import { MoodBadge } from "./mood-badge";
 
 interface SceneCardProps {
@@ -33,7 +34,10 @@ export function SceneCard({ scene, selected, onClick }: SceneCardProps) {
       </p>
       {scene.current_iteration?.sketch_url && (
         <img
-          src={scene.current_iteration.sketch_url}
+          src={
+            publicBackendUrl(scene.current_iteration.sketch_url) ??
+            scene.current_iteration.sketch_url
+          }
           alt="Scene sketch"
           className="mt-2 w-full h-16 object-cover rounded border border-gray-200 dark:border-gray-700"
         />

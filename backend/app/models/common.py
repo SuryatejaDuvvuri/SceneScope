@@ -85,3 +85,26 @@ class StructureAnalysis(BaseModel):
         default="",
         description="One-paragraph summary of the emotional arc of the script"
     )
+
+
+class SceneShotPlan(BaseModel):
+    """Structured scene-to-shot-plan output used for prompt assembly."""
+
+    required_subjects: list[str] = Field(default_factory=list)
+    ambient_population_hint: str | None = None
+    setting_direction: str = ""
+    camera_direction: str = ""
+    blocking_direction: str = ""
+    lighting_direction: str = ""
+    continuity_constraints: list[str] = Field(default_factory=list)
+    negative_constraints: list[str] = Field(default_factory=list)
+
+
+class RefinementIntent(BaseModel):
+    """Structured parser output for user refinement feedback."""
+
+    preserve_constraints: list[str] = Field(default_factory=list)
+    change_requests: list[str] = Field(default_factory=list)
+    avoid_changes: list[str] = Field(default_factory=list)
+    priority: str = "balanced"
+    confidence: float = 0.5

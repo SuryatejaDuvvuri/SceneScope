@@ -53,6 +53,10 @@ CREATE TABLE IF NOT EXISTS scene_iterations (
     sketch_url TEXT,     -- path to generated image
     image_provider TEXT, -- "together" or "openai"
     director_notes TEXT, -- JSON: director agent interpretation + reasoning
+    llm_model TEXT,      -- model slug used for LLM planning/parsing
+    planner_version TEXT,
+    intent_parser_version TEXT,
+    prompt_builder_version TEXT,
     created_at TEXT DEFAULT (datetime('now'))
 );
 

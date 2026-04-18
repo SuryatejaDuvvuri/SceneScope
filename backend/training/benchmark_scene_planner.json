@@ -1,0 +1,65 @@
+[
+  {
+    "id": "bar_conversation",
+    "heading": "INT. CAMPUS BAR - NIGHT",
+    "description": "MARK and ERICA sit at a small table in a crowded campus bar while students chat around them. Mark speaks intensely while Erica becomes increasingly uncomfortable.",
+    "mood": "tense",
+    "visual_summary": "A crowded bar with warm practical lights and a tense two-person conversation at center frame.",
+    "dialogue_lines": [
+      {"character": "MARK", "text": "How do you distinguish yourself?"},
+      {"character": "ERICA", "text": "I didn't know they take SATs in China."}
+    ],
+    "expected_required_subjects": ["MARK", "ERICA"],
+    "expected_population": "crowded"
+  },
+  {
+    "id": "empty_corridor",
+    "heading": "INT. HOSPITAL CORRIDOR - NIGHT",
+    "description": "A single nurse walks through a dim, nearly empty corridor. Fluorescent lights flicker overhead.",
+    "mood": "somber",
+    "visual_summary": "Long corridor perspective with one lone subject and sparse activity.",
+    "dialogue_lines": [
+      {"character": "NURSE", "text": "Hello? Is anyone there?"}
+    ],
+    "expected_required_subjects": ["NURSE"],
+    "expected_population": "sparse"
+  },
+  {
+    "id": "street_argument",
+    "heading": "EXT. CITY STREET - DAY",
+    "description": "JAMIE confronts RYAN on a noisy downtown sidewalk while traffic and pedestrians pass behind them.",
+    "mood": "action",
+    "visual_summary": "Dynamic street confrontation with moving background life.",
+    "dialogue_lines": [
+      {"character": "JAMIE", "text": "You lied to me."},
+      {"character": "RYAN", "text": "I was protecting you."}
+    ],
+    "expected_required_subjects": ["JAMIE", "RYAN"],
+    "expected_population": "crowded"
+  },
+  {
+    "id": "living_room_romance",
+    "heading": "INT. LIVING ROOM - EVENING",
+    "description": "SOFIA and LEO sit close together on a couch, speaking softly in a warm apartment lit by table lamps.",
+    "mood": "romantic",
+    "visual_summary": "Intimate two-shot with warm practical lighting and shallow depth feel.",
+    "dialogue_lines": [
+      {"character": "SOFIA", "text": "I don't want tonight to end."},
+      {"character": "LEO", "text": "Then stay."}
+    ],
+    "expected_required_subjects": ["SOFIA", "LEO"],
+    "expected_population": "sparse"
+  },
+  {
+    "id": "classroom_pitch",
+    "heading": "INT. CLASSROOM - DAY",
+    "description": "MAYA stands at the front presenting while a full class watches from tiered desks.",
+    "mood": "uplifting",
+    "visual_summary": "Presenter foregrounded, audience depth visible behind.",
+    "dialogue_lines": [
+      {"character": "MAYA", "text": "This is how we can build it."}
+    ],
+    "expected_required_subjects": ["MAYA"],
+    "expected_population": "crowded"
+  }
+]

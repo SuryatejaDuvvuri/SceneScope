@@ -12,14 +12,13 @@ import type {
   SceneAudio,
   VoiceInfo,
 } from "./types";
-
-const BASE_URL = "/api";
+import { API_ROOT } from "./publicUrl";
 
 async function request<T>(
   path: string,
   options: RequestInit = {}
 ): Promise<T> {
-  const res = await fetch(`${BASE_URL}${path}`, {
+  const res = await fetch(`${API_ROOT}${path}`, {
     headers: { "Content-Type": "application/json", ...options.headers },
     ...options,
   });
@@ -122,7 +121,7 @@ export async function getStructureAnalysis(
 // ── Export ──
 
 export async function exportStoryboard(projectId: string): Promise<Blob> {
-  const res = await fetch(`${BASE_URL}/projects/${projectId}/export`);
+  const res = await fetch(`${API_ROOT}/projects/${projectId}/export`);
   if (!res.ok) throw new Error(`Export failed: ${res.status}`);
   return res.blob();
 }

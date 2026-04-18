@@ -22,7 +22,7 @@ class Settings(BaseSettings):
     DATABASE_PATH: str = "./scenescope.db"
     STATIC_DIR: str = "./static/images"
     AUDIO_DIR: str = "./static/audio"
-    GROQ_MODEL: str = "llama-3.1-8b-instant"
+    GROQ_MODEL: str = "llama-3.3-70b-versatile"
 
     # Image Generation
     IDEOGRAM_API_KEY: str = ""

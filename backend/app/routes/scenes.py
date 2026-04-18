@@ -16,7 +16,7 @@ from app.models.scene import (
     ConsultRequest, ConsultFollowUpRequest, ConsultResponse,
 )
 from app.models.common import StructureAnalysis
-from app.services.promptBuilder import buildPrompt
+from app.services.promptBuilder import buildPrompt, PROMPT_BUILDER_VERSION
 from app.services.imageGenerator import generateImage
 from app.services.moodClassifier import classify_mood
 from app.services.shotSuggester import suggest_shots
@@ -33,6 +33,12 @@ from app.services.visualConsistency import (
 from app.services.structureAnalyzer import analyze_structure
 from app.services.directorAgent import consult_director, continue_consultation
 from app.services.sceneAnalyzer import generateRefinementQuestions
+from app.services.scenePlanner import (
+    plan_scene_to_shot,
+    parse_refinement_intent,
+    SCENE_PLANNER_VERSION,
+    INTENT_PARSER_VERSION,
+)
 from app.services.textSummary import summarize_to_chars
 from app.services.usageLimits import enforce_daily_image_limit
 from app.config import settings
@@ -224,8 +230,25 @@ async def refine_scene(scene_id: str, body: RefineRequest, user: dict = Depends(
         # weight from the diffusion model — this is the single biggest lever
         # for cross-scene character identity stability.
         scene_dialogue = from_json(scene["dialogue"]) if scene["dialogue"] else []
-        required_subjects = _required_subjects(scene["description"] or "", scene_dialogue)
-        ambient_hint = _ambient_population_hint(scene["heading"], scene["description"] or "")
+        shot_plan = plan_scene_to_shot(
+            heading=scene["heading"] or "UNKNOWN",
+            description=scene["description"] or "",
+            mood=scene["mood"] or "neutral",
+            visual_summary=scene["visual_summary"] or "",
+            dialogue_lines=scene_dialogue,
+            time_period=project_time_period,
+            tone=project_tone,
+        )
+        required_subjects = shot_plan.required_subjects or _required_subjects(scene["description"] or "", scene_dialogue)
+        ambient_hint = shot_plan.ambient_population_hint or _ambient_population_hint(scene["heading"], scene["description"] or "")
+        planning_directives = [
+            shot_plan.setting_direction,
+            shot_plan.camera_direction,
+            shot_plan.blocking_direction,
+            shot_plan.lighting_direction,
+            *shot_plan.continuity_constraints,
+            *shot_plan.negative_constraints,
+        ]
         prompt = buildPrompt(
             visualSummary=scene["visual_summary"] or "",
             mood=scene["mood"] or "neutral",
@@ -233,10 +256,24 @@ async def refine_scene(scene_id: str, body: RefineRequest, user: dict = Depends(
             reference_films=project_films,
             consistency=consistencySuffix or None,
             required_subjects=required_subjects or None,
+            planning_directives=planning_directives,
             time_period=project_time_period,
             tone=project_tone,
             ambient_population_hint=ambient_hint,
         )
+
+        intent = parse_refinement_intent(
+            heading=scene["heading"] or "",
+            description=scene["description"] or "",
+            feedback=body.feedback or "",
+            answers=body.answers,
+        )
+        if intent.preserve_constraints:
+            prompt += ", preserve constraints: " + "; ".join(intent.preserve_constraints[:5])
+        if intent.change_requests:
+            prompt += ", requested changes: " + "; ".join(intent.change_requests[:6])
+        if intent.avoid_changes:
+            prompt += ", avoid: " + "; ".join(intent.avoid_changes[:5])
 
         # Append director's refined prompt modifier (or raw feedback as fallback)
         if director_notes:
@@ -303,11 +340,11 @@ async def refine_scene(scene_id: str, body: RefineRequest, user: dict = Depends(
         sketch_url = f"/static/images/{image.filePath.split('/')[-1]}"
         await db.execute(
             """INSERT INTO scene_iterations
-               (id, scene_id, iteration_number, prompt_used, answers, feedback, sketch_url, image_provider, director_notes)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+               (id, scene_id, iteration_number, prompt_used, answers, feedback, sketch_url, image_provider, director_notes, llm_model, planner_version, intent_parser_version, prompt_builder_version)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (iteration_id, scene_id, next_iteration, prompt,
              to_json(body.answers), body.feedback, sketch_url, image.source,
-             to_json(director_notes))
+             to_json(director_notes), settings.GROQ_MODEL, SCENE_PLANNER_VERSION, INTENT_PARSER_VERSION, PROMPT_BUILDER_VERSION)
         )
 
         # Update scene's current iteration
@@ -579,6 +616,10 @@ async def _build_scene_response(db, scene) -> SceneResponse:
             sketch_url=it["sketch_url"],
             image_provider=it["image_provider"],
             director_notes=notes,
+            llm_model=it["llm_model"] if "llm_model" in it.keys() else None,
+            planner_version=it["planner_version"] if "planner_version" in it.keys() else None,
+            intent_parser_version=it["intent_parser_version"] if "intent_parser_version" in it.keys() else None,
+            prompt_builder_version=it["prompt_builder_version"] if "prompt_builder_version" in it.keys() else None,
             created_at=it["created_at"]
         ))
 

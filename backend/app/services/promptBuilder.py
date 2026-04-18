@@ -18,8 +18,15 @@ MOOD_MODIFIERS = {
     "surprise": "dramatic lighting shifts, dynamic angles, high contrast, sharp focus, wide framing",
 }
 
-STYLE_PREFIX = "hand-painted storyboard illustration, colored ink and watercolor"
-STYLE_SUFFIX = "visible brushstrokes, painted color art, NOT a photograph, NOT photorealistic"
+STYLE_PREFIX = (
+    "2D illustrated storyboard keyframe, hand-painted production art, colored ink and watercolor wash, "
+    "mild graphic flattening — reads as drawn boards, not a photograph"
+)
+PROMPT_BUILDER_VERSION = "prompt-builder-v2"
+STYLE_SUFFIX = (
+    "loose painted edges, visible brushstrokes, simplified faces and hands, stylized not photographic, "
+    "no DSLR snapshot, no hyperreal skin or pore detail, no glossy 3D render"
+)
 STORYBOARD_PRIORITIES = (
     "storyboard priorities: clear perspective and depth readability, believable simplified anatomy, "
     "clean staging/blocking and silhouettes, expressive acting poses/facial intent, sequence-art clarity "
@@ -34,6 +41,7 @@ def buildPrompt(
     reference_films: Optional[list[str]] = None,
     consistency: Optional[str] = None,
     required_subjects: Optional[list[str]] = None,
+    planning_directives: Optional[list[str]] = None,
     time_period: Optional[str] = None,
     tone: Optional[str] = None,
     ambient_population_hint: Optional[str] = None,
@@ -62,9 +70,18 @@ def buildPrompt(
                 + ", ".join(clean_subjects[:4])
                 + " in frame; do not generate an empty environment-only shot"
             )
+            parts.append(
+                "CHARACTER UNIQUENESS: each named lead appears as exactly one person in frame — "
+                "no duplicated clones, no repeated identical faces, no twin copies of the same character; "
+                "crowd extras are generic silhouettes, not extra instances of leads"
+            )
 
     if ambient_population_hint:
         parts.append(ambient_population_hint)
+
+    if planning_directives:
+        directives = [d.strip() for d in planning_directives if d and d.strip()]
+        parts.extend(directives[:8])
 
     if time_period:
         parts.append(f"time period fidelity: {time_period.strip()}")
@@ -106,7 +123,8 @@ def buildCharacterPortraitPrompt(name: str, description: str) -> str:
         STYLE_PREFIX,
         f"character reference portrait of {name}",
         clean_desc,
-        "single subject, head and shoulders, neutral plain background, even soft lighting, front-facing, no text, no props",
+        "single subject only, head and shoulders, neutral plain background, even soft lighting, "
+        "front-facing, no text, no props, no duplicate faces",
         STYLE_SUFFIX,
     ]
     return ", ".join(p for p in parts if p)

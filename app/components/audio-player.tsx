@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { DialogueLine, SceneAudio } from "~/lib/types";
 import { generateSceneAudio, getSceneAudio } from "~/lib/api";
+import { publicBackendUrl } from "~/lib/publicUrl";
 
 interface AudioPlayerProps {
   sceneId: string;
@@ -25,6 +26,7 @@ export function AudioPlayer({ sceneId, dialogue }: AudioPlayerProps) {
   const hasDialogue = (dialogue?.length || 0) > 0;
   const durationMs = audio ? audio.total_duration_ms : 0;
   const progressPct = durationMs > 0 ? Math.min(100, (progressMs / durationMs) * 100) : 0;
+  const playbackUrl = audio?.audio_url ? publicBackendUrl(audio.audio_url) ?? audio.audio_url : null;
 
   useEffect(() => {
     let cancelled = false;
@@ -61,7 +63,7 @@ export function AudioPlayer({ sceneId, dialogue }: AudioPlayerProps) {
       el.removeEventListener("timeupdate", onTime);
       el.removeEventListener("ended", onEnded);
     };
-  }, [audio?.audio_url]);
+  }, [playbackUrl]);
 
   const transcript = useMemo(
     () => (audio?.dialogue_data?.length ? audio.dialogue_data : dialogue || []),
@@ -114,9 +116,9 @@ export function AudioPlayer({ sceneId, dialogue }: AudioPlayerProps) {
     <div className="mt-4 rounded-lg border border-gray-200 dark:border-gray-700 p-3 bg-white dark:bg-gray-900">
       <h4 className="text-sm font-semibold text-gray-700 dark:text-gray-200">Dialogue Audio</h4>
 
-      {audio?.audio_url ? (
+      {playbackUrl ? (
         <div className="mt-3 space-y-2">
-          <audio ref={audioRef} src={audio.audio_url} preload="metadata" />
+          <audio ref={audioRef} src={playbackUrl} preload="metadata" />
           <div className="flex items-center gap-2">
             <button
               onClick={handleTogglePlay}

@@ -2,6 +2,7 @@ import { useState, useEffect } from "react";
 import { useParams, useNavigate } from "react-router";
 import type { Project } from "~/lib/types";
 import { getProject, exportStoryboard } from "~/lib/api";
+import { publicBackendUrl } from "~/lib/publicUrl";
 import { MoodBadge } from "~/components/mood-badge";
 
 export default function ExportStoryboard() {
@@ -94,7 +95,10 @@ export default function ExportStoryboard() {
                 {/* Sketch */}
                 {scene.current_iteration?.sketch_url && (
                   <img
-                    src={scene.current_iteration.sketch_url}
+                    src={
+                      publicBackendUrl(scene.current_iteration.sketch_url) ??
+                      scene.current_iteration.sketch_url
+                    }
                     alt={scene.heading || "Scene sketch"}
                     className="w-full h-56 object-cover"
                   />

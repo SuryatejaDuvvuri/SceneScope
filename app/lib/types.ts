@@ -82,6 +82,10 @@ export interface SceneIteration {
   sketch_url: string | null;
   image_provider: string | null;
   director_notes: DirectorNotes | null;
+  llm_model?: string | null;
+  planner_version?: string | null;
+  intent_parser_version?: string | null;
+  prompt_builder_version?: string | null;
   created_at: string;
 }
 

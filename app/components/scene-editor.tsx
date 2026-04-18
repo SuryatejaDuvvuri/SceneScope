@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from "react";
 import type { Scene } from "~/lib/types";
+import { publicBackendUrl } from "~/lib/publicUrl";
 import { MoodBadge } from "./mood-badge";
 import { ShotInfo } from "./shot-info";
 import { ClarifyingQuestions } from "./clarifying-questions";
@@ -39,6 +40,7 @@ export function SceneEditor({ scene, onRefine, onLock, refining }: SceneEditorPr
   }, [scene.id]);
   const selected = scene.iterations.find((it) => it.iteration_number === selectedIteration) || scene.current_iteration;
   const sketchUrl = selected?.sketch_url;
+  const sketchSrc = sketchUrl ? publicBackendUrl(sketchUrl) ?? sketchUrl : null;
 
   return (
     <div className="h-full flex flex-col">
@@ -97,6 +99,8 @@ export function SceneEditor({ scene, onRefine, onLock, refining }: SceneEditorPr
                 {scene.description}
               </p>
             </div>
+
+            <AudioPlayer sceneId={scene.id} dialogue={scene.dialogue || []} />
 
             {/* Iteration Details */}
             {selected && (
@@ -185,10 +189,10 @@ export function SceneEditor({ scene, onRefine, onLock, refining }: SceneEditorPr
                 <div className="w-12 h-12 border-4 border-blue-200 dark:border-blue-800 border-t-blue-600 rounded-full animate-spin mx-auto" />
                 <p className="text-sm text-gray-500 dark:text-gray-400">Generating sketch...</p>
               </div>
-            ) : sketchUrl ? (
+            ) : sketchSrc ? (
               <div className="w-full">
                 <img
-                  src={sketchUrl}
+                  src={sketchSrc}
                   alt={`Sketch for ${scene.heading}`}
                   className="w-full rounded-lg border border-gray-200 dark:border-gray-700 shadow-sm"
                 />
@@ -196,10 +200,6 @@ export function SceneEditor({ scene, onRefine, onLock, refining }: SceneEditorPr
             ) : (
               <p className="text-sm text-gray-400 dark:text-gray-500">No sketch generated yet</p>
             )}
-
-            <div className="w-full">
-              <AudioPlayer sceneId={scene.id} dialogue={scene.dialogue || []} />
-            </div>
           </div>
         </div>
       </div>

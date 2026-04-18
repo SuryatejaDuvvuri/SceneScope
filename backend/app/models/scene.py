@@ -70,6 +70,10 @@ class SceneIterationResponse(BaseModel):
     sketch_url: str | None
     image_provider: str | None
     director_notes: DirectorNotes | None = None
+    llm_model: str | None = None
+    planner_version: str | None = None
+    intent_parser_version: str | None = None
+    prompt_builder_version: str | None = None
     created_at: str
 
 
