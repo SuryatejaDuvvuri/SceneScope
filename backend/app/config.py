@@ -38,6 +38,17 @@ class Settings(BaseSettings):
     CORS_ORIGINS: str = "http://localhost:5173"
     BACKEND_PUBLIC_URL: str = ""
 
+    # Product limits / abuse guardrails
+    MAX_SCENES_PER_PROJECT: int = 60
+    MAX_SCENES_PER_UPLOAD: int = 20
+    MAX_IMAGE_GENERATIONS_PER_DAY: int = 120
+
+    # Consistency behavior
+    STRICT_REFERENCE_REFINEMENT: bool = True
+
+    # Director agent tuning
+    DIRECTOR_TEMPERATURE: float = 0.35
+
     class Config:
         env_file = ".env"
         env_file_encoding = "utf-8"

@@ -9,6 +9,8 @@ import type {
   ConsultFollowUpRequest,
   ConsultResponse,
   StructureAnalysis,
+  SceneAudio,
+  VoiceInfo,
 } from "./types";
 
 const BASE_URL = "/api";
@@ -123,4 +125,29 @@ export async function exportStoryboard(projectId: string): Promise<Blob> {
   const res = await fetch(`${BASE_URL}/projects/${projectId}/export`);
   if (!res.ok) throw new Error(`Export failed: ${res.status}`);
   return res.blob();
+}
+
+// ── Audio ──
+
+export async function generateSceneAudio(sceneId: string): Promise<SceneAudio> {
+  return request<SceneAudio>(`/scenes/${sceneId}/audio`, { method: "POST" });
+}
+
+export async function getSceneAudio(sceneId: string): Promise<SceneAudio | null> {
+  return request<SceneAudio | null>(`/scenes/${sceneId}/audio`);
+}
+
+export async function getProjectVoices(projectId: string): Promise<VoiceInfo[]> {
+  return request<VoiceInfo[]>(`/projects/${projectId}/voices`);
+}
+
+export async function setProjectVoice(
+  projectId: string,
+  characterName: string,
+  voiceId: string
+): Promise<VoiceInfo> {
+  return request<VoiceInfo>(`/projects/${projectId}/voices/${encodeURIComponent(characterName)}`, {
+    method: "PUT",
+    body: JSON.stringify({ voice_id: voiceId }),
+  });
 }

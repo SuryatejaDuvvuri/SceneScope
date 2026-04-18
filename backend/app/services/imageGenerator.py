@@ -375,6 +375,7 @@ def generateImage(
     character_refs: list[dict] | None = None,
     seed: Optional[int] = None,
     scene_text: Optional[str] = None,
+    strict_reference_mode: bool = False,
 ) -> ImageResult:
     """Generate a scene image with provider fallback.
 
@@ -384,6 +385,9 @@ def generateImage(
         When present, providers that support character conditioning are tried first.
       - ``seed``: deterministic seed (typically derived from project_id) so style/composition stays stable across scenes.
       - ``scene_text``: scene description used to pick the most relevant character ref for image-prompted providers.
+      - ``strict_reference_mode``: when True and ``reference_image_url`` exists, only
+        img2img-capable providers are allowed. This prevents silent fallback to
+        text-only generation that breaks character continuity during refinement.
     """
     errors: list[str] = []
     providers = _get_provider_order()
@@ -396,7 +400,7 @@ def generateImage(
     if reference_image_url:
         img2img_providers = [p for p in providers if p in {"replicate", "fal", "ideogram"}]
         text_only_providers = [p for p in providers if p not in img2img_providers]
-        providers = img2img_providers + text_only_providers
+        providers = img2img_providers if strict_reference_mode else (img2img_providers + text_only_providers)
 
     primary_ref = _pick_primary_character_ref(character_refs, scene_text)
     primary_ref_url = primary_ref["image_url"] if primary_ref else None

@@ -1,6 +1,6 @@
 // ── Mood ──
 
-export type Mood = "tense" | "uplifting" | "somber" | "action";
+export type Mood = "tense" | "uplifting" | "somber" | "action" | "romantic" | "comedic";
 
 // ── Project ──
 
@@ -50,6 +50,7 @@ export interface Scene {
   vague_elements: string[];
   clarifying_questions: ClarifyingQuestion[];
   visual_summary: string | null;
+  dialogue: DialogueLine[];
   shot_suggestions: ShotSuggestions | null;
   current_iteration: SceneIteration | null;
   iterations: SceneIteration[];
@@ -64,6 +65,12 @@ export interface DirectorNotes {
   reasoning: string;
   prompt_modifier: string;
   follow_up: string | null;
+}
+
+export interface DialogueLine {
+  character: string;
+  text: string;
+  parenthetical?: string | null;
 }
 
 export interface SceneIteration {
@@ -149,4 +156,20 @@ export interface StructureAnalysis {
   tonal_shifts: TonalShift[];
   pacing: string;
   arc_summary: string;
+}
+
+// ── Audio ──
+
+export interface SceneAudio {
+  id: string;
+  scene_id: string;
+  audio_url: string;
+  dialogue_data: DialogueLine[];
+  total_duration_ms: number;
+}
+
+export interface VoiceInfo {
+  character_name: string;
+  voice_id: string;
+  voice_name?: string | null;
 }

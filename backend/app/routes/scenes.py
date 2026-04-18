@@ -8,6 +8,7 @@ This file handles everything AFTER initial creation.
 """
 
 import uuid
+import re
 from fastapi import APIRouter, HTTPException, Depends
 from app.db import get_db, to_json, from_json
 from app.models.scene import (
@@ -33,6 +34,7 @@ from app.services.structureAnalyzer import analyze_structure
 from app.services.directorAgent import consult_director, continue_consultation
 from app.services.sceneAnalyzer import generateRefinementQuestions
 from app.services.textSummary import summarize_to_chars
+from app.services.usageLimits import enforce_daily_image_limit
 from app.config import settings
 from app.auth import get_current_user
 
@@ -54,6 +56,83 @@ async def _get_project_films(db, project_id: str) -> list[str]:
     if not project:
         return []
     return from_json(project["films"]) or []
+
+
+async def _get_project_style(db, project_id: str) -> tuple[str | None, str | None]:
+    """Fetch project time_period and visual tone."""
+    row = await db.execute("SELECT time_period, tone FROM projects WHERE id = ?", (project_id,))
+    project = await row.fetchone()
+    if not project:
+        return None, None
+    return project["time_period"], project["tone"]
+
+
+def _dialogue_characters(dialogue_lines: list[dict]) -> list[str]:
+    """Extract unique speaking character names in stable order."""
+    seen: set[str] = set()
+    names: list[str] = []
+    for line in dialogue_lines or []:
+        raw = (line.get("character") or "").strip()
+        if not raw or raw.upper() == "UNKNOWN":
+            continue
+        key = raw.upper()
+        if key in seen:
+            continue
+        seen.add(key)
+        names.append(raw)
+    return names
+
+
+def _named_subjects_from_text(text: str) -> list[str]:
+    """Extract likely character names from screenplay action text."""
+    blacklist = {
+        "INT", "EXT", "DAY", "NIGHT", "MORNING", "EVENING", "NOON",
+        "CUT TO", "FADE IN", "FADE OUT",
+    }
+    pattern = r"\b[A-Z][A-Z]+(?:\s+[A-Z][A-Z]+){0,2}\b"
+    candidates = re.findall(pattern, text or "")
+    seen: set[str] = set()
+    names: list[str] = []
+    for c in candidates:
+        cleaned = c.strip()
+        if cleaned in blacklist:
+            continue
+        if len(cleaned) < 3:
+            continue
+        if cleaned in seen:
+            continue
+        seen.add(cleaned)
+        names.append(cleaned.title())
+    return names
+
+
+def _required_subjects(description: str, dialogue_lines: list[dict]) -> list[str]:
+    """Merge dialogue speakers + uppercase action-line character mentions."""
+    merged: list[str] = []
+    seen: set[str] = set()
+    for name in _dialogue_characters(dialogue_lines) + _named_subjects_from_text(description):
+        key = name.strip().upper()
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        merged.append(name.strip())
+    return merged
+
+
+def _ambient_population_hint(heading: str | None, description: str) -> str | None:
+    """Setting-aware extras hint for more realistic first-pass frames."""
+    text = f"{heading or ''}\n{description}".lower()
+    crowded_setting_keywords = (
+        "bar", "pub", "club", "cafe", "coffee shop", "restaurant", "campus",
+        "classroom", "hallway", "street", "market", "party",
+    )
+    isolation_keywords = ("empty", "abandoned", "deserted", "vacant", "alone")
+
+    if any(k in text for k in isolation_keywords):
+        return "background population: keep environment sparsely populated or empty if story context demands isolation"
+    if any(k in text for k in crowded_setting_keywords):
+        return "background population: include plausible ambient extras (patrons/students/bystanders) without replacing the primary named characters"
+    return None
 
 
 async def _verify_scene_ownership(db, scene_id: str, user_id: str):
@@ -113,6 +192,7 @@ async def refine_scene(scene_id: str, body: RefineRequest, user: dict = Depends(
                 prev_sketch_url = prev_iter["sketch_url"]
 
         project_films = await _get_project_films(db, scene["project_id"])
+        project_time_period, project_tone = await _get_project_style(db, scene["project_id"])
 
         # Use pre-confirmed director notes from /consult flow, or consult on the fly
         director_notes = None
@@ -143,12 +223,19 @@ async def refine_scene(scene_id: str, body: RefineRequest, user: dict = Depends(
         # style anchor) so character/location descriptions get high attention
         # weight from the diffusion model — this is the single biggest lever
         # for cross-scene character identity stability.
+        scene_dialogue = from_json(scene["dialogue"]) if scene["dialogue"] else []
+        required_subjects = _required_subjects(scene["description"] or "", scene_dialogue)
+        ambient_hint = _ambient_population_hint(scene["heading"], scene["description"] or "")
         prompt = buildPrompt(
             visualSummary=scene["visual_summary"] or "",
             mood=scene["mood"] or "neutral",
             answers=body.answers,
             reference_films=project_films,
             consistency=consistencySuffix or None,
+            required_subjects=required_subjects or None,
+            time_period=project_time_period,
+            tone=project_tone,
+            ambient_population_hint=ambient_hint,
         )
 
         # Append director's refined prompt modifier (or raw feedback as fallback)
@@ -182,6 +269,14 @@ async def refine_scene(scene_id: str, body: RefineRequest, user: dict = Depends(
             base = getattr(settings, "BACKEND_PUBLIC_URL", "").rstrip("/")
             if base:
                 reference_image_url = f"{base}{prev_sketch_url}"
+            elif settings.STRICT_REFERENCE_REFINEMENT:
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        "Refinement consistency requires BACKEND_PUBLIC_URL so providers can access "
+                        "the previous frame as a reference image."
+                    ),
+                )
 
         # Only pass character refs whose names appear in this scene — passing
         # the full project roster confuses character-conditioned providers.
@@ -191,12 +286,16 @@ async def refine_scene(scene_id: str, body: RefineRequest, user: dict = Depends(
         # composition rhythm, and color palette across all scenes.
         gen_seed = project_seed(scene["project_id"])
 
+        # Rate limit: each refinement consumes one additional image generation.
+        await enforce_daily_image_limit(db, user["id"], 1)
+
         image = generateImage(
             prompt,
             reference_image_url=reference_image_url,
             character_refs=char_refs or None,
             seed=gen_seed,
             scene_text=scene_text_for_filter,
+            strict_reference_mode=bool(reference_image_url) and settings.STRICT_REFERENCE_REFINEMENT,
         )
 
         # Save iteration to DB

@@ -3,6 +3,7 @@ import type { Scene } from "~/lib/types";
 import { MoodBadge } from "./mood-badge";
 import { ShotInfo } from "./shot-info";
 import { ClarifyingQuestions } from "./clarifying-questions";
+import { AudioPlayer } from "./audio-player";
 
 const MAX_REFINEMENTS = 3;
 
@@ -195,6 +196,10 @@ export function SceneEditor({ scene, onRefine, onLock, refining }: SceneEditorPr
             ) : (
               <p className="text-sm text-gray-400 dark:text-gray-500">No sketch generated yet</p>
             )}
+
+            <div className="w-full">
+              <AudioPlayer sceneId={scene.id} dialogue={scene.dialogue || []} />
+            </div>
           </div>
         </div>
       </div>

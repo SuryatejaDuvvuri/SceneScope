@@ -1,4 +1,5 @@
 import uuid
+import re
 from fastapi import APIRouter, HTTPException, Depends
 from app.db import get_db, to_json, from_json
 from app.models.project import ProjectCreate, ProjectResponse, ProjectSummary
@@ -17,9 +18,87 @@ from app.services.visualConsistency import (
 )
 from app.models.common import VisualContext
 from app.auth import get_current_user
+from app.services.usageLimits import (
+    enforce_daily_image_limit,
+    enforce_project_scene_limit,
+    enforce_upload_scene_limit,
+)
 from screenplay_tools.fountain.parser import Parser
 
 router = APIRouter(tags=["projects"])
+
+
+def _dialogue_characters(dialogue_lines: list[dict]) -> list[str]:
+    """Extract unique speaking character names in stable order."""
+    seen: set[str] = set()
+    names: list[str] = []
+    for line in dialogue_lines or []:
+        raw = (line.get("character") or "").strip()
+        if not raw or raw.upper() == "UNKNOWN":
+            continue
+        key = raw.upper()
+        if key in seen:
+            continue
+        seen.add(key)
+        names.append(raw)
+    return names
+
+
+def _named_subjects_from_text(text: str) -> list[str]:
+    """Extract likely character names from screenplay action text.
+
+    Fountain often writes character intros in uppercase in action lines:
+    e.g. "MARK ZUCKERBERG is a ...". Capture those so first-pass generation
+    includes the characters even before any lock/refine cycle.
+    """
+    blacklist = {
+        "INT", "EXT", "DAY", "NIGHT", "MORNING", "EVENING", "NOON",
+        "CUT TO", "FADE IN", "FADE OUT",
+    }
+    pattern = r"\b[A-Z][A-Z]+(?:\s+[A-Z][A-Z]+){0,2}\b"
+    candidates = re.findall(pattern, text or "")
+    seen: set[str] = set()
+    names: list[str] = []
+    for c in candidates:
+        cleaned = c.strip()
+        if cleaned in blacklist:
+            continue
+        if len(cleaned) < 3:
+            continue
+        if cleaned in seen:
+            continue
+        seen.add(cleaned)
+        names.append(cleaned.title())
+    return names
+
+
+def _required_subjects(description: str, dialogue_lines: list[dict]) -> list[str]:
+    """Merge speaker names + named subjects from action text."""
+    merged: list[str] = []
+    seen: set[str] = set()
+    for name in _dialogue_characters(dialogue_lines) + _named_subjects_from_text(description):
+        key = name.strip().upper()
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        merged.append(name.strip())
+    return merged
+
+
+def _ambient_population_hint(heading: str | None, description: str) -> str | None:
+    """Return setting-aware extras hint so first output isn't unnaturally empty."""
+    text = f"{heading or ''}\n{description}".lower()
+    crowded_setting_keywords = (
+        "bar", "pub", "club", "cafe", "coffee shop", "restaurant", "campus",
+        "classroom", "hallway", "street", "market", "party",
+    )
+    isolation_keywords = ("empty", "abandoned", "deserted", "vacant", "alone")
+
+    if any(k in text for k in isolation_keywords):
+        return "background population: keep environment sparsely populated or empty if story context demands isolation"
+    if any(k in text for k in crowded_setting_keywords):
+        return "background population: include plausible ambient extras (patrons/students/bystanders) without replacing the primary named characters"
+    return None
 
 @router.post("/projects", response_model=ProjectResponse)
 async def create_project(body: ProjectCreate, user: dict = Depends(get_current_user)):
@@ -137,7 +216,10 @@ async def create_scenes(project_id: str, body: ScenesCreate, user: dict = Depend
     db = await get_db()
 
     # Verify project exists and belongs to user
-    row = await db.execute("SELECT id, films FROM projects WHERE id = ? AND user_id = ?", (project_id, user["id"]))
+    row = await db.execute(
+        "SELECT id, films, time_period, tone FROM projects WHERE id = ? AND user_id = ?",
+        (project_id, user["id"]),
+    )
     project = await row.fetchone()
     if not project:
         await db.close()
@@ -198,6 +280,11 @@ async def create_scenes(project_id: str, body: ScenesCreate, user: dict = Depend
         parsed_scenes.append(buildScene(1, None, description_lines))
         scene_dialogues.append(dialogue_lines)
 
+    # Usage controls: per-upload batch size, per-project cap, and daily image quota.
+    enforce_upload_scene_limit(len(parsed_scenes))
+    await enforce_project_scene_limit(db, project_id, len(parsed_scenes))
+    await enforce_daily_image_limit(db, user["id"], len(parsed_scenes))
+
     # Step 2-5: For each parsed scene, run the full pipeline
     scene_responses = []
     errors = []
@@ -232,11 +319,19 @@ async def create_scenes(project_id: str, body: ScenesCreate, user: dict = Depend
                 scene_text=scene_text_for_filter,
             )
 
+            scene_dialogue = scene_dialogues[idx] if idx < len(scene_dialogues) else []
+            required_subjects = _required_subjects(parsed.description, scene_dialogue)
+            ambient_hint = _ambient_population_hint(parsed.heading, parsed.description)
+
             prompt = buildPrompt(
                 visualSummary=analysis.visualSummary,
                 mood=mood_result.mood,
                 reference_films=from_json(project["films"]) or [],
                 consistency=consistency_suffix or None,
+                required_subjects=required_subjects or None,
+                time_period=project["time_period"],
+                tone=project["tone"],
+                ambient_population_hint=ambient_hint,
             )
 
             # Step 5: Generate sketch with project-deterministic seed and
@@ -251,7 +346,6 @@ async def create_scenes(project_id: str, body: ScenesCreate, user: dict = Depend
 
             # Save scene to DB (including dialogue if present)
             scene_id = uuid.uuid4().hex
-            scene_dialogue = scene_dialogues[idx] if idx < len(scene_dialogues) else []
             await db.execute(
                 """INSERT INTO scenes (id, project_id, scene_number, heading, description,
                    mood, mood_confidence, vague_elements, clarifying_questions, visual_summary, dialogue)
@@ -368,6 +462,8 @@ async def _build_scene_response(db, scene) -> SceneResponse:
     if scene["current_iteration_id"]:
         current = next((i for i in iteration_responses if i.id == scene["current_iteration_id"]), None)
 
+    dialogue = from_json(scene["dialogue"]) if scene["dialogue"] else []
+
     return SceneResponse(
         id=scene["id"],
         project_id=scene["project_id"],
@@ -379,6 +475,7 @@ async def _build_scene_response(db, scene) -> SceneResponse:
         vague_elements=from_json(scene["vague_elements"]) or [],
         clarifying_questions=from_json(scene["clarifying_questions"]) or [],
         visual_summary=scene["visual_summary"],
+        dialogue=dialogue or [],
         current_iteration=current,
         iterations=iteration_responses,
         locked=bool(scene["locked"]),

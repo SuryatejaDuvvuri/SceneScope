@@ -20,6 +20,11 @@ MOOD_MODIFIERS = {
 
 STYLE_PREFIX = "hand-painted storyboard illustration, colored ink and watercolor"
 STYLE_SUFFIX = "visible brushstrokes, painted color art, NOT a photograph, NOT photorealistic"
+STORYBOARD_PRIORITIES = (
+    "storyboard priorities: clear perspective and depth readability, believable simplified anatomy, "
+    "clean staging/blocking and silhouettes, expressive acting poses/facial intent, sequence-art clarity "
+    "that communicates ideas and emotion fast; prefer confident sketch readability over polished detail"
+)
 
 
 def buildPrompt(
@@ -28,6 +33,10 @@ def buildPrompt(
     answers: Optional[Dict[str, str]] = None,
     reference_films: Optional[list[str]] = None,
     consistency: Optional[str] = None,
+    required_subjects: Optional[list[str]] = None,
+    time_period: Optional[str] = None,
+    tone: Optional[str] = None,
+    ambient_population_hint: Optional[str] = None,
 ) -> str:
     """Compose the final image prompt.
 
@@ -42,6 +51,28 @@ def buildPrompt(
 
     if consistency:
         parts.append(consistency)
+
+    if required_subjects:
+        clean_subjects = [s.strip() for s in required_subjects if s and s.strip()]
+        if clean_subjects:
+            # Hard constraint to prevent "empty room" outputs when scene dialogue
+            # clearly implies on-screen characters.
+            parts.append(
+                "MANDATORY SUBJECTS: include visible human characters "
+                + ", ".join(clean_subjects[:4])
+                + " in frame; do not generate an empty environment-only shot"
+            )
+
+    if ambient_population_hint:
+        parts.append(ambient_population_hint)
+
+    if time_period:
+        parts.append(f"time period fidelity: {time_period.strip()}")
+
+    if tone:
+        parts.append(f"visual tone target: {tone.strip()}")
+
+    parts.append(STORYBOARD_PRIORITIES)
 
     parts.append(visualSummary.strip())
 

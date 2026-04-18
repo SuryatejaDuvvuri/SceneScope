@@ -28,7 +28,14 @@ You are a screenplay scene analyst helping a director pre-visualize scenes. Give
    - "suggestion": A reasonable default answer based on the scene's mood and context (what an experienced director would choose)
    Example: {"question": "What type of lighting is in the bar?", "suggestion": "Dim warm overhead lights with neon beer signs casting colored reflections"}
 
-3. "visualSummary": A single concise paragraph describing what this scene looks like visually, filling in reasonable defaults for any vague elements. Focused on setting, composition, lighting, color, and mood.
+3. "visualSummary": A single concise paragraph describing what this scene looks like visually, filling in reasonable defaults for any vague elements. Focus on setting, composition, lighting, color, mood, and storyboard readability.
+
+Storyboard craft heuristics:
+- Perspective: establish depth and spatial relationships clearly.
+- Anatomy/posing: characters should have believable proportions and readable body language.
+- Staging/blocking: make subject hierarchy obvious at a glance (who matters most in frame).
+- Acting intent: expression/gesture should convey emotional subtext, not just literal action.
+- Sequence-art clarity: favor visual communication speed over ornamental detail.
 
 Respond with ONLY valid JSON. No other text."""
 
@@ -90,6 +97,7 @@ Focus on:
 - Aspects NOT yet addressed (camera movement, depth of field, background activity, character expressions, specific props)
 - Areas where the user's feedback suggests dissatisfaction (lighting, composition, mood, character positioning)
 - Finer visual details that would help an image generator produce a more accurate result
+- Storyboard fundamentals (perspective clarity, anatomy/pose readability, staging/blocking, acting intent, sequence continuity)
 
 Respond with ONLY a JSON object:
 {
