@@ -132,11 +132,24 @@ def buildPrompt(
     modifier = MOOD_MODIFIERS.get(mood.lower(), MOOD_MODIFIERS["neutral"])
     parts.append(modifier)
 
-    # ── 9. Reference films (expanded with visual descriptors) ────────────────────
+    # ── 9. Reference films (style-only, capped to prevent setting bleed) ─────────
+    # Film descriptors inform LIGHTING + MOOD + CAMERA STYLE only — not setting.
+    # We hard-cap to 120 chars per film so a long TSN/Dune descriptor doesn't
+    # introduce location imagery (office monitors, desert sand) into a bar scene.
     if reference_films:
-        films = ", ".join(f.strip() for f in reference_films if f and f.strip())
-        if films:
-            parts.append(f"cinematic references: {films}")
+        capped = []
+        for f in reference_films:
+            f = f.strip()
+            if not f:
+                continue
+            if len(f) > 120:
+                f = f[:120].rsplit(" ", 1)[0]  # cut at word boundary
+            capped.append(f)
+        if capped:
+            parts.append(
+                "cinematic lighting and camera style only (do NOT change the setting) — "
+                + ", ".join(capped)
+            )
 
     # ── 10. Director modifier ────────────────────────────────────────────────────
     if director_modifier and director_modifier.strip():

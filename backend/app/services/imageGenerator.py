@@ -339,7 +339,7 @@ def generateImageGemini(
     try:
         client = genai.Client(api_key=settings.GEMINI_API_KEY)
         response = client.models.generate_content(
-            model="gemini-2.5-flash-preview-image",
+            model="gemini-2.5-flash-image",
             contents=contents,
         )
 
