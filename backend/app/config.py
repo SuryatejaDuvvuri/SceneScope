@@ -1,5 +1,10 @@
+from pathlib import Path
+
+from pydantic import model_validator
 from pydantic_settings import BaseSettings
 
+# Directory containing requirements.txt / static/ — always correct regardless of cwd.
+_BACKEND_ROOT = Path(__file__).resolve().parent.parent
 
 
 class Settings(BaseSettings):
@@ -36,6 +41,20 @@ class Settings(BaseSettings):
     class Config:
         env_file = ".env"
         env_file_encoding = "utf-8"
+
+    @model_validator(mode="after")
+    def resolve_paths_relative_to_backend(self):
+        """Render (and some shells) start uvicorn with cwd = repo root, not ``backend/``.
+
+        Relative ``DATABASE_PATH`` / ``STATIC_DIR`` / ``AUDIO_DIR`` would then
+        point at the wrong place and ``StaticFiles`` fails before lifespan runs.
+        """
+        for field in ("DATABASE_PATH", "STATIC_DIR", "AUDIO_DIR"):
+            raw = getattr(self, field)
+            p = Path(raw)
+            if not p.is_absolute():
+                setattr(self, field, str((_BACKEND_ROOT / p).resolve()))
+        return self
 
 
 settings = Settings()

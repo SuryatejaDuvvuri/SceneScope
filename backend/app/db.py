@@ -3,8 +3,11 @@ import json
 from pathlib import Path
 from app.config import settings
 
-# Path to the SQL schema file
-SCHEMA_PATH = Path(__file__).parent.parent.parent / "scripts" / "db.sql"
+# Prefer backend/scripts/db.sql (Render rootDir: backend). Fall back to repo-root
+# scripts/db.sql for older checkouts that only have the file at the monorepo root.
+_backend_schema = Path(__file__).resolve().parent.parent / "scripts" / "db.sql"
+_repo_schema = Path(__file__).resolve().parent.parent.parent / "scripts" / "db.sql"
+SCHEMA_PATH = _backend_schema if _backend_schema.is_file() else _repo_schema
 
 
 async def get_db() -> aiosqlite.Connection:
