@@ -9,13 +9,24 @@ from app.config import settings
 from app.db import init_db
 
 
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    await init_db()
+def _ensure_storage_dirs() -> None:
+    """StaticFiles requires these paths to exist before mount (module import time).
+
+    Lifespan runs too late — mounts are evaluated when this module loads.
+    """
     Path(settings.STATIC_DIR).mkdir(parents=True, exist_ok=True)
     Path(settings.AUDIO_DIR).mkdir(parents=True, exist_ok=True)
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    Path(settings.DATABASE_PATH).parent.mkdir(parents=True, exist_ok=True)
+    await init_db()
+    _ensure_storage_dirs()
     yield
 
+
+_ensure_storage_dirs()
 
 app = FastAPI(
     title="SceneScope API",
