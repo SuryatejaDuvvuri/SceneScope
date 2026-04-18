@@ -8,12 +8,9 @@ httpx
 requests
 python-multipart
 fpdf2
-transformers
-torch
 
 groq
 screenplay-tools
-stability-sdk
 replicate
 fal-client
 elevenlabs

@@ -69,6 +69,13 @@ async def init_db():
                 """)
                 await db.commit()
 
+            # Add seed column to characters if missing (deterministic per-character image gen)
+            cols = await db.execute("PRAGMA table_info(characters)")
+            char_cols = [c["name"] for c in await cols.fetchall()]
+            if char_cols and "seed" not in char_cols:
+                await db.execute("ALTER TABLE characters ADD COLUMN seed INTEGER")
+                await db.commit()
+
             # Create character_voices table if missing
             row = await db.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='character_voices'")
             if not await row.fetchone():

@@ -4,14 +4,52 @@ services:
     runtime: python
     rootDir: backend
     buildCommand: pip install -r requirements.txt
-    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT --proxy-headers --forwarded-allow-ips=*
     healthCheckPath: /api/health
-    plan: free
+    plan: starter
     envVars:
+      - key: PYTHON_VERSION
+        value: 3.11.9
       - key: DATABASE_PATH
         value: /opt/render/project/src/backend/data/scenescope.db
       - key: STATIC_DIR
         value: /opt/render/project/src/backend/data/static/images
+      - key: AUDIO_DIR
+        value: /opt/render/project/src/backend/data/static/audio
+      - key: GROQ_API_KEY
+        sync: false
+      - key: STABILITY_API_KEY
+        sync: false
+      - key: FAL_KEY
+        sync: false
+      - key: REPLICATE_API_TOKEN
+        sync: false
+      - key: REPLICATE_MODEL_VERSION
+        sync: false
+      - key: HUGGINGFACE_API_TOKEN
+        sync: false
+      - key: HF_MODEL_ID
+        value: RedMinder56/scenescope-mood-classifier
+      - key: GROQ_MODEL
+        value: llama-3.1-8b-instant
+      - key: IMAGE_PROVIDER_ORDER
+        value: fal,stability,replicate
+      - key: GOOGLE_CLIENT_ID
+        sync: false
+      - key: GOOGLE_CLIENT_SECRET
+        sync: false
+      - key: JWT_SECRET_KEY
+        sync: false
+      - key: FRONTEND_URL
+        value: https://scenescope.pages.dev
+      - key: CORS_ORIGINS
+        value: http://localhost:5173,https://scenescope.pages.dev
+      - key: BACKEND_PUBLIC_URL
+        sync: false
+      - key: ELEVENLABS_API_KEY
+        sync: false
+      - key: IDEOGRAM_API_KEY
+        sync: false
     disk:
       name: scenescope-data
       mountPath: /opt/render/project/src/backend/data

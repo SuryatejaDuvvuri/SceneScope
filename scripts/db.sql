@@ -64,6 +64,7 @@ CREATE TABLE IF NOT EXISTS characters (
     age TEXT,
     description TEXT,
     image_url TEXT,
+    seed INTEGER,                              -- deterministic seed per character for image gen consistency
     created_at TEXT DEFAULT (datetime('now')),
     updated_at TEXT DEFAULT (datetime('now'))
 );

@@ -7,6 +7,7 @@ import requests
 
 from app.config import settings
 from app.services.textSummary import summarize_to_chars
+from app.services.promptBuilder import buildCharacterPortraitPrompt
 
 
 class ImageResult:
@@ -107,18 +108,26 @@ def _replicate_predict(input_payload: dict) -> str:
     return _poll_replicate_prediction(data["urls"]["get"], headers)
 
 
-def generateImageReplicate(prompt: str, reference_image_url: str | None = None) -> Optional[ImageResult]:
+def generateImageReplicate(
+    prompt: str,
+    reference_image_url: str | None = None,
+    seed: Optional[int] = None,
+    width: int = 1024,
+    height: int = 576,
+) -> Optional[ImageResult]:
     if not settings.REPLICATE_API_TOKEN:
         raise RuntimeError("Replicate API token not configured")
 
     final_prompt = _prepare_prompt(prompt)
 
-    base_input = {
+    base_input: dict = {
         "prompt": final_prompt,
         "negative_prompt": NEGATIVE_PROMPT,
-        "width": 1024,
-        "height": 576,
+        "width": width,
+        "height": height,
     }
+    if seed is not None:
+        base_input["seed"] = seed
 
     image_url: str
     if reference_image_url:
@@ -144,7 +153,11 @@ def generateImageReplicate(prompt: str, reference_image_url: str | None = None) 
     return ImageResult(filePath=filePath, source="replicate")
 
 
-def generateImageStability(prompt: str) -> Optional[ImageResult]:
+def generateImageStability(
+    prompt: str,
+    seed: Optional[int] = None,
+    aspect_ratio: str = "16:9",
+) -> Optional[ImageResult]:
     if not settings.STABILITY_API_KEY:
         raise RuntimeError("Stability API key not configured")
 
@@ -155,12 +168,14 @@ def generateImageStability(prompt: str) -> Optional[ImageResult]:
         "Authorization": f"Bearer {settings.STABILITY_API_KEY}",
         "Accept": "image/*",
     }
-    payload = {
+    payload: dict = {
         "prompt": final_prompt,
         "negative_prompt": NEGATIVE_PROMPT,
         "output_format": "png",
-        "aspect_ratio": "16:9",
+        "aspect_ratio": aspect_ratio,
     }
+    if seed is not None:
+        payload["seed"] = str(seed)  # Stability multipart wants strings
 
     # Stability Core expects multipart/form-data payloads.
     response = requests.post(
@@ -186,8 +201,22 @@ def generateImageStability(prompt: str) -> Optional[ImageResult]:
     return ImageResult(filePath=filePath, source="stability")
 
 
-def generateImageFal(prompt: str, reference_image_url: str | None = None) -> Optional[ImageResult]:
-    """Generate an image using Flux Pro via fal.ai."""
+def generateImageFal(
+    prompt: str,
+    reference_image_url: str | None = None,
+    character_ref_image_url: str | None = None,
+    seed: Optional[int] = None,
+    width: int = 1024,
+    height: int = 576,
+) -> Optional[ImageResult]:
+    """Generate an image using Flux Pro via fal.ai.
+
+    ``reference_image_url`` is a previous *iteration* sketch of the same scene
+    (img2img refinement). ``character_ref_image_url`` is a clean character
+    portrait used for cross-scene character identity. If both are provided we
+    prefer the per-iteration reference (refining a specific frame matters more
+    in the moment).
+    """
     if not settings.FAL_KEY:
         raise RuntimeError("FAL_KEY not configured")
 
@@ -195,16 +224,21 @@ def generateImageFal(prompt: str, reference_image_url: str | None = None) -> Opt
 
     final_prompt = _prepare_prompt(prompt)
 
-    input_data = {
+    input_data: dict = {
         "prompt": final_prompt,
-        "image_size": {"width": 1024, "height": 576},
+        "image_size": {"width": width, "height": height},
         "num_images": 1,
         "safety_tolerance": "5",
     }
+    if seed is not None:
+        input_data["seed"] = seed
 
-    if reference_image_url:
-        input_data["image_url"] = reference_image_url
-        input_data["strength"] = 0.65  # 65% prompt influence, 35% reference
+    img_url = reference_image_url or character_ref_image_url
+    if img_url:
+        input_data["image_url"] = img_url
+        # Iteration refinement should follow the previous frame closely; a
+        # cross-scene character ref should bias only mildly toward the portrait.
+        input_data["strength"] = 0.65 if reference_image_url else 0.35
 
     try:
         os.environ["FAL_KEY"] = settings.FAL_KEY
@@ -228,7 +262,11 @@ def generateImageFal(prompt: str, reference_image_url: str | None = None) -> Opt
         raise
 
 
-def generateImageIdeogram(prompt: str, character_refs: list[dict] | None = None) -> Optional[ImageResult]:
+def generateImageIdeogram(
+    prompt: str,
+    character_refs: list[dict] | None = None,
+    seed: Optional[int] = None,
+) -> Optional[ImageResult]:
     """Generate an image using Ideogram API with optional character reference for consistency."""
     if not settings.IDEOGRAM_API_KEY:
         raise RuntimeError("IDEOGRAM_API_KEY not configured")
@@ -241,17 +279,18 @@ def generateImageIdeogram(prompt: str, character_refs: list[dict] | None = None)
         "Content-Type": "application/json",
     }
 
-    payload = {
-        "image_request": {
-            "prompt": final_prompt,
-            "aspect_ratio": "ASPECT_16_9",
-            "model": "V_2",
-            "style_type": "DESIGN",
-            "negative_prompt": NEGATIVE_PROMPT,
-        }
+    image_request: dict = {
+        "prompt": final_prompt,
+        "aspect_ratio": "ASPECT_16_9",
+        "model": "V_2",
+        "style_type": "DESIGN",
+        "negative_prompt": NEGATIVE_PROMPT,
     }
+    if seed is not None:
+        image_request["seed"] = seed
 
-    # Add character references if available
+    payload = {"image_request": image_request}
+
     if character_refs:
         char_ref_images = []
         for ref in character_refs:
@@ -298,35 +337,89 @@ def _get_provider_order() -> list[str]:
     return valid or ["fal", "stability", "replicate"]
 
 
-def generateImage(prompt: str, reference_image_url: str | None = None, character_refs: list[dict] | None = None) -> ImageResult:
-    """Generate an image, optionally conditioning on a previous image URL for refinement.
+def _pick_primary_character_ref(
+    character_refs: list[dict] | None,
+    scene_text: Optional[str],
+) -> Optional[dict]:
+    """Pick the single character ref most likely to be the scene's POV subject.
 
-    When character_refs are available, Ideogram is tried first for character consistency.
+    Heuristic: among refs whose name appears in the scene, return the one
+    mentioned earliest (a proxy for "the character we open on / focus on").
+    Returns None when zero or many refs are equally relevant — we don't want
+    to bias the image toward a random secondary character.
+    """
+    if not character_refs:
+        return None
+    if not scene_text:
+        return character_refs[0] if len(character_refs) == 1 else None
+
+    import re as _re
+    positions: list[tuple[int, dict]] = []
+    for ref in character_refs:
+        name = ref.get("name", "")
+        if not name:
+            continue
+        m = _re.search(r"\b" + _re.escape(name) + r"\b", scene_text, _re.IGNORECASE)
+        if m:
+            positions.append((m.start(), ref))
+
+    if not positions:
+        return None
+    positions.sort(key=lambda p: p[0])
+    return positions[0][1]
+
+
+def generateImage(
+    prompt: str,
+    reference_image_url: str | None = None,
+    character_refs: list[dict] | None = None,
+    seed: Optional[int] = None,
+    scene_text: Optional[str] = None,
+) -> ImageResult:
+    """Generate a scene image with provider fallback.
+
+    Parameters:
+      - ``reference_image_url``: previous-iteration sketch URL for img2img refinement (within-scene consistency).
+      - ``character_refs``: list of {name, description, image_url, seed} for characters the project knows about.
+        When present, providers that support character conditioning are tried first.
+      - ``seed``: deterministic seed (typically derived from project_id) so style/composition stays stable across scenes.
+      - ``scene_text``: scene description used to pick the most relevant character ref for image-prompted providers.
     """
     errors: list[str] = []
-
     providers = _get_provider_order()
 
-    # When character refs exist, try Ideogram first for consistency
+    # Prefer Ideogram when we have character refs (it actually uses them).
     if character_refs and "ideogram" not in providers:
         providers = ["ideogram"] + providers
 
-    # When refining with a reference image, prioritize providers that support img2img
+    # When refining with a reference image, prioritize providers that support img2img.
     if reference_image_url:
         img2img_providers = [p for p in providers if p in {"replicate", "fal", "ideogram"}]
         text_only_providers = [p for p in providers if p not in img2img_providers]
         providers = img2img_providers + text_only_providers
 
+    primary_ref = _pick_primary_character_ref(character_refs, scene_text)
+    primary_ref_url = primary_ref["image_url"] if primary_ref else None
+
     for provider in providers:
         try:
             if provider == "stability":
-                result = generateImageStability(prompt)
+                result = generateImageStability(prompt, seed=seed)
             elif provider == "fal":
-                result = generateImageFal(prompt, reference_image_url=reference_image_url)
+                result = generateImageFal(
+                    prompt,
+                    reference_image_url=reference_image_url,
+                    character_ref_image_url=primary_ref_url,
+                    seed=seed,
+                )
             elif provider == "ideogram":
-                result = generateImageIdeogram(prompt, character_refs=character_refs)
+                result = generateImageIdeogram(prompt, character_refs=character_refs, seed=seed)
             else:
-                result = generateImageReplicate(prompt, reference_image_url=reference_image_url)
+                result = generateImageReplicate(
+                    prompt,
+                    reference_image_url=reference_image_url,
+                    seed=seed,
+                )
 
             if result:
                 return result
@@ -339,3 +432,57 @@ def generateImage(prompt: str, reference_image_url: str | None = None, character
         if errors else
         "All image generators failed. Check API keys/model configuration."
     )
+
+
+def generateCharacterPortrait(
+    name: str,
+    description: str,
+    seed: Optional[int] = None,
+) -> Optional[ImageResult]:
+    """Generate a clean reference portrait for one character (used at lock-time).
+
+    Tries the configured providers in order but uses portrait aspect ratio and
+    a focused single-subject prompt. Returns None if every provider fails — the
+    caller should treat portrait generation as best-effort and not crash lock.
+    """
+    prompt = buildCharacterPortraitPrompt(name, description)
+    providers = _get_provider_order()
+
+    for provider in providers:
+        try:
+            if provider == "fal":
+                return generateImageFal(prompt, seed=seed, width=768, height=1024)
+            if provider == "stability":
+                return generateImageStability(prompt, seed=seed, aspect_ratio="3:4")
+            if provider == "replicate":
+                return generateImageReplicate(prompt, seed=seed, width=768, height=1024)
+            if provider == "ideogram":
+                # Ideogram has no portrait aspect helper here; ASPECT_3_4 supported by API.
+                if not settings.IDEOGRAM_API_KEY:
+                    continue
+                url = "https://api.ideogram.ai/generate"
+                headers = {"Api-Key": settings.IDEOGRAM_API_KEY, "Content-Type": "application/json"}
+                image_request: dict = {
+                    "prompt": _prepare_prompt(prompt),
+                    "aspect_ratio": "ASPECT_3_4",
+                    "model": "V_2",
+                    "style_type": "DESIGN",
+                    "negative_prompt": NEGATIVE_PROMPT,
+                }
+                if seed is not None:
+                    image_request["seed"] = seed
+                resp = requests.post(url, headers=headers, json={"image_request": image_request}, timeout=90)
+                if resp.status_code >= 400:
+                    raise RuntimeError(f"Ideogram portrait HTTP {resp.status_code}: {resp.text}")
+                data = resp.json().get("data", [])
+                if not data or not data[0].get("url"):
+                    raise RuntimeError("Ideogram portrait: no image returned")
+                img_response = requests.get(data[0]["url"], timeout=30)
+                img_response.raise_for_status()
+                filePath = saveImage(img_response.content, settings.STATIC_DIR)
+                return ImageResult(filePath=filePath, source="ideogram-portrait")
+        except Exception as e:
+            print(f"Portrait gen via {provider} failed: {e}")
+            continue
+
+    return None

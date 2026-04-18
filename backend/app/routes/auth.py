@@ -26,10 +26,24 @@ GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token"
 GOOGLE_USERINFO_URL = "https://www.googleapis.com/oauth2/v2/userinfo"
 
 
+def _callback_url(request: Request) -> str:
+    """Build the OAuth redirect_uri.
+
+    Prefer BACKEND_PUBLIC_URL when configured so the URI is stable and matches
+    exactly what's registered in the Google Cloud Console (behind a proxy like
+    Render/Cloudflare, request.url_for can otherwise emit http:// or the wrong
+    host). Fall back to request-derived URL for local dev.
+    """
+    base = (settings.BACKEND_PUBLIC_URL or "").rstrip("/")
+    if base:
+        return f"{base}/api/auth/google/callback"
+    return str(request.url_for("google_callback"))
+
+
 @router.get("/google")
 async def google_login(request: Request):
     """Redirect user to Google OAuth consent screen."""
-    callback_url = str(request.url_for("google_callback"))
+    callback_url = _callback_url(request)
     params = {
         "client_id": settings.GOOGLE_CLIENT_ID,
         "redirect_uri": callback_url,
@@ -44,7 +58,7 @@ async def google_login(request: Request):
 @router.get("/google/callback", name="google_callback")
 async def google_callback(request: Request, code: str):
     """Exchange auth code for tokens, create/find user, redirect with JWT."""
-    callback_url = str(request.url_for("google_callback"))
+    callback_url = _callback_url(request)
 
     # Exchange code for tokens
     async with httpx.AsyncClient() as client:

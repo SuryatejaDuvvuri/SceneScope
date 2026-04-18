@@ -8,7 +8,13 @@ from app.services.moodClassifier import classify_mood
 from app.services.sceneAnalyzer import analyzeScene
 from app.services.promptBuilder import buildPrompt
 from app.services.imageGenerator import generateImage
-from app.services.visualConsistency import extractVisualDetails, buildConsistencyPrompt, get_character_references
+from app.services.visualConsistency import (
+    extractVisualDetails,
+    buildConsistencyPrompt,
+    get_character_refs_for_scene,
+    get_existing_characters,
+    project_seed,
+)
 from app.models.common import VisualContext
 from app.auth import get_current_user
 from screenplay_tools.fountain.parser import Parser
@@ -209,23 +215,39 @@ async def create_scenes(project_id: str, body: ScenesCreate, user: dict = Depend
                 mood=mood_result.mood
             )
 
-            # Step 4: Build image prompt (with cross-scene consistency when location was seen before)
-            consistency_suffix = ""
-            if location_cache:
-                ctx = VisualContext(characters={}, locations=location_cache, props={})
-                consistency_suffix = buildConsistencyPrompt(ctx)
+            # Step 4: Build image prompt (with cross-scene consistency for
+            # both characters seen in earlier scenes AND locations previously
+            # cached). The consistency string is filtered to entities that
+            # actually appear in this scene's description, then placed at the
+            # FRONT of the prompt by buildPrompt for high attention weight.
+            scene_text_for_filter = f"{parsed.heading or ''}\n{parsed.description}"
+            known_chars = await get_existing_characters(db, project_id)
+            consistency_ctx = VisualContext(
+                characters=known_chars,
+                locations=location_cache,
+                props={},
+            )
+            consistency_suffix = buildConsistencyPrompt(
+                consistency_ctx,
+                scene_text=scene_text_for_filter,
+            )
 
             prompt = buildPrompt(
                 visualSummary=analysis.visualSummary,
                 mood=mood_result.mood,
                 reference_films=from_json(project["films"]) or [],
+                consistency=consistency_suffix or None,
             )
-            if consistency_suffix:
-                prompt += f", {consistency_suffix}"
 
-            # Step 5: Generate sketch (with character refs from previously processed scenes)
-            char_refs = await get_character_references(project_id)
-            image = generateImage(prompt, character_refs=char_refs or None)
+            # Step 5: Generate sketch with project-deterministic seed and
+            # only the character refs whose names appear in this scene.
+            char_refs = await get_character_refs_for_scene(project_id, scene_text_for_filter)
+            image = generateImage(
+                prompt,
+                character_refs=char_refs or None,
+                seed=project_seed(project_id),
+                scene_text=scene_text_for_filter,
+            )
 
             # Save scene to DB (including dialogue if present)
             scene_id = uuid.uuid4().hex
@@ -257,12 +279,16 @@ async def create_scenes(project_id: str, body: ScenesCreate, user: dict = Depend
 
             await db.commit()
 
-            # Extract visual details immediately — subsequent scenes in the same location will reuse them
+            # Extract visual details immediately — subsequent scenes in the
+            # same location will reuse them. Pass the known character roster
+            # so the extractor doesn't generate fresh, drifting descriptions
+            # for characters that already exist in this project.
             try:
                 details = extractVisualDetails(
                     heading=parsed.heading or "",
                     description=parsed.description,
                     visualSummary=analysis.visualSummary,
+                    known_characters=known_chars,
                 )
                 if details.get("locations"):
                     await db.execute(

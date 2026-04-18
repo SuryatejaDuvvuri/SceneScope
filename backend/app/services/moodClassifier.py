@@ -4,25 +4,12 @@ from typing import Optional
 from app.config import settings
 from app.services.textSummary import summarize_to_chars
 
-# Local model (loaded once on first use)
-_local_pipeline = None
-
-def _get_local_pipeline():
-    """Lazily load the custom RoBERTa model via transformers pipeline."""
-    global _local_pipeline
-    if _local_pipeline is None:
-        try:
-            from transformers import pipeline
-            _local_pipeline = pipeline(
-                "text-classification",
-                model=settings.HF_MODEL_ID,
-                top_k=None,
-            )
-            print(f"Loaded local model: {settings.HF_MODEL_ID}")
-        except Exception as e:
-            print(f"Failed to load local model: {e}")
-            _local_pipeline = False  # Mark as failed so we don't retry
-    return _local_pipeline if _local_pipeline is not False else None
+# Primary model: fine-tuned SceneScope RoBERTa, called via HF Inference API.
+# Previously this was loaded locally via `transformers` + `torch`, but that
+# makes the backend slug too large and blows past the 512MB RAM ceiling on
+# small Render / similar hosts. Remote inference keeps the service lean.
+def _hf_custom_url() -> str:
+    return f"https://router.huggingface.co/hf-inference/models/{settings.HF_MODEL_ID}"
 
 # Fallback: generic emotion model (via HF Inference API)
 HF_GENERIC_MODEL = "j-hartmann/emotion-english-distilroberta-base"
@@ -53,24 +40,33 @@ class MoodResult:
 
 
 def classify_mood_custom(text: str) -> Optional[MoodResult]:
-    """Primary: run the fine-tuned RoBERTa model locally via transformers."""
-    pipe = _get_local_pipeline()
-    if pipe is None:
+    """Primary: fine-tuned SceneScope RoBERTa via HuggingFace Inference API."""
+    if not settings.HUGGINGFACE_API_TOKEN or not settings.HF_MODEL_ID:
         return None
 
+    headers = {"Authorization": f"Bearer {settings.HUGGINGFACE_API_TOKEN}"}
+    truncated = summarize_to_chars(text, 1500, focus_text="emotion mood tension tone")
+    payload = {"inputs": truncated, "parameters": {"top_k": None}}
+
     try:
-        truncated = summarize_to_chars(text, 1500, focus_text="emotion mood tension tone")
-        results = pipe(truncated)
-        # results is [[{'label': 'action', 'score': 0.58}, ...]]
-        predictions = results[0] if isinstance(results[0], list) else results
-        top = max(predictions, key=lambda x: x["score"])
-        return MoodResult(
-            mood=top["label"],
-            confidence=top["score"],
-            source="scenescope-roberta-local"
-        )
+        response = requests.post(_hf_custom_url(), headers=headers, json=payload, timeout=20)
+        results = response.json()
+
+        # Cold-start: HF returns {"error": "Model ... is currently loading", "estimated_time": N}
+        if isinstance(results, dict) and "error" in results:
+            print(f"Custom HF model unavailable: {results.get('error')}")
+            return None
+
+        if results and isinstance(results, list):
+            predictions = results[0] if isinstance(results[0], list) else results
+            top = max(predictions, key=lambda x: x["score"])
+            return MoodResult(
+                mood=top["label"],
+                confidence=top["score"],
+                source="scenescope-roberta-hf",
+            )
     except Exception as e:
-        print(f"Local custom model failed: {e}")
+        print(f"Custom HF model failed: {e}")
     return None
 
 

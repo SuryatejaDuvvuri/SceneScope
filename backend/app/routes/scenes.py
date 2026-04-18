@@ -19,7 +19,16 @@ from app.services.promptBuilder import buildPrompt
 from app.services.imageGenerator import generateImage
 from app.services.moodClassifier import classify_mood
 from app.services.shotSuggester import suggest_shots
-from app.services.visualConsistency import extractVisualDetails, getProjectContext, buildConsistencyPrompt, save_character_reference, get_character_references
+from app.services.visualConsistency import (
+    extractVisualDetails,
+    getProjectContext,
+    buildConsistencyPrompt,
+    save_character_reference,
+    get_character_refs_for_scene,
+    get_existing_characters,
+    ensure_character_portraits,
+    project_seed,
+)
 from app.services.structureAnalyzer import analyze_structure
 from app.services.directorAgent import consult_director, continue_consultation
 from app.services.sceneAnalyzer import generateRefinementQuestions
@@ -83,9 +92,12 @@ async def refine_scene(scene_id: str, body: RefineRequest, user: dict = Depends(
         if next_iteration > MAX_REFINEMENTS:
             raise HTTPException(status_code=400, detail=f"Maximum {MAX_REFINEMENTS} refinements reached. Lock the scene to finalize.")
 
-        # Get visual context from locked scenes for cross-scene consistency
+        # Get visual context from locked scenes for cross-scene consistency.
+        # Filter to characters/locations actually mentioned in THIS scene so the
+        # prompt isn't drowned by every character the project has ever locked.
         context = await getProjectContext(scene["project_id"])
-        consistencySuffix = buildConsistencyPrompt(context)
+        scene_text_for_filter = f"{scene['heading'] or ''}\n{scene['description'] or ''}"
+        consistencySuffix = buildConsistencyPrompt(context, scene_text=scene_text_for_filter)
 
         # Get previous iteration's prompt for within-scene consistency
         prev_prompt = ""
@@ -126,12 +138,17 @@ async def refine_scene(scene_id: str, body: RefineRequest, user: dict = Depends(
                 iteration_history=iteration_history,
             )
 
-        # Rebuild prompt with user answers + director's interpretation
+        # Rebuild prompt with user answers + director's interpretation.
+        # Consistency is now placed at the FRONT of the prompt (right after the
+        # style anchor) so character/location descriptions get high attention
+        # weight from the diffusion model — this is the single biggest lever
+        # for cross-scene character identity stability.
         prompt = buildPrompt(
             visualSummary=scene["visual_summary"] or "",
             mood=scene["mood"] or "neutral",
             answers=body.answers,
             reference_films=project_films,
+            consistency=consistencySuffix or None,
         )
 
         # Append director's refined prompt modifier (or raw feedback as fallback)
@@ -139,10 +156,6 @@ async def refine_scene(scene_id: str, body: RefineRequest, user: dict = Depends(
             prompt += f", {director_notes['prompt_modifier']}"
         elif body.feedback:
             prompt += f", artistic direction: {body.feedback}"
-
-        # Append visual consistency context (cross-scene)
-        if consistencySuffix:
-            prompt += f", {consistencySuffix}"
 
         # Carry forward key visual anchors from previous iteration (within-scene)
         if prev_prompt:
@@ -170,9 +183,21 @@ async def refine_scene(scene_id: str, body: RefineRequest, user: dict = Depends(
             if base:
                 reference_image_url = f"{base}{prev_sketch_url}"
 
-        # Fetch character references for visual consistency
-        char_refs = await get_character_references(scene["project_id"])
-        image = generateImage(prompt, reference_image_url=reference_image_url, character_refs=char_refs or None)
+        # Only pass character refs whose names appear in this scene — passing
+        # the full project roster confuses character-conditioned providers.
+        char_refs = await get_character_refs_for_scene(scene["project_id"], scene_text_for_filter)
+
+        # Per-project deterministic seed: same project → consistent style,
+        # composition rhythm, and color palette across all scenes.
+        gen_seed = project_seed(scene["project_id"])
+
+        image = generateImage(
+            prompt,
+            reference_image_url=reference_image_url,
+            character_refs=char_refs or None,
+            seed=gen_seed,
+            scene_text=scene_text_for_filter,
+        )
 
         # Save iteration to DB
         iteration_id = uuid.uuid4().hex
@@ -244,7 +269,10 @@ async def consult_scene(scene_id: str, body: ConsultRequest, user: dict = Depend
             raise HTTPException(status_code=400, detail="Scene is locked")
 
         context = await getProjectContext(scene["project_id"])
-        consistencySuffix = buildConsistencyPrompt(context)
+        consistencySuffix = buildConsistencyPrompt(
+            context,
+            scene_text=f"{scene['heading'] or ''}\n{scene['description'] or ''}",
+        )
         genre = await _get_project_genre(db, scene["project_id"])
 
         notes = consult_director(
@@ -302,11 +330,14 @@ async def lock_scene(scene_id: str, user: dict = Depends(get_current_user)):
         if scene["locked"]:
             raise HTTPException(status_code=400, detail="Scene is already locked")
 
-        # Extract visual details for consistency with future scenes
+        # Pass the existing canonical roster so the extractor reuses prior
+        # descriptions verbatim for any returning character (prevents drift).
+        known_roster = await get_existing_characters(db, scene["project_id"])
         details = extractVisualDetails(
             heading=scene["heading"] or "",
             description=scene["description"],
             visualSummary=scene["visual_summary"] or "",
+            known_characters=known_roster,
         )
 
         # Lock the scene and store visual context
@@ -316,21 +347,33 @@ async def lock_scene(scene_id: str, user: dict = Depends(get_current_user)):
         )
         await db.commit()
 
-        # Save character reference images for visual consistency across scenes
-        if details.get("characters") and scene["current_iteration_id"]:
-            iter_row = await db.execute(
-                "SELECT sketch_url FROM scene_iterations WHERE id = ?",
-                (scene["current_iteration_id"],)
+        # Persist canonical character descriptions. ``save_character_reference``
+        # does NOT overwrite existing descriptions, so the first lock for each
+        # character defines them forever (any later re-extraction is ignored).
+        # We deliberately do NOT save the scene sketch as the character's
+        # ``image_url`` — a wide-shot group sketch is a terrible character
+        # reference and was actively poisoning Ideogram's character_reference
+        # input. Real per-character portraits are generated below.
+        new_characters: dict[str, str] = {}
+        for char_name, char_desc in (details.get("characters") or {}).items():
+            await save_character_reference(
+                project_id=scene["project_id"],
+                character_name=char_name,
+                image_url=None,
+                description=char_desc,
             )
-            current_iter = await iter_row.fetchone()
-            if current_iter and current_iter["sketch_url"]:
-                base_url = (settings.BACKEND_PUBLIC_URL or "").rstrip("/")
-                if base_url:
-                    for char_name, char_desc in details["characters"].items():
-                        full_url = f"{base_url}{current_iter['sketch_url']}"
-                        await save_character_reference(
-                            scene["project_id"], char_name, full_url, char_desc
-                        )
+            if char_name not in known_roster:
+                new_characters[char_name] = char_desc
+
+        # Generate a clean solo portrait for each character that's new to the
+        # project. Best-effort: if portrait generation fails, lock still
+        # succeeds. These portraits become the character_reference inputs for
+        # all subsequent scenes featuring this character.
+        if new_characters:
+            try:
+                await ensure_character_portraits(scene["project_id"], new_characters)
+            except Exception as e:
+                print(f"ensure_character_portraits failed: {e}")
 
         scene_row = await db.execute("SELECT * FROM scenes WHERE id = ?", (scene_id,))
         updated_scene = await scene_row.fetchone()

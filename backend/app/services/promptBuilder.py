@@ -27,9 +27,23 @@ def buildPrompt(
     mood: str,
     answers: Optional[Dict[str, str]] = None,
     reference_films: Optional[list[str]] = None,
+    consistency: Optional[str] = None,
 ) -> str:
-    # Style anchor first to set the medium, then scene content, then reinforce at end
-    parts = [STYLE_PREFIX, visualSummary.strip()]
+    """Compose the final image prompt.
+
+    Token order matters for diffusion models: earlier tokens get more attention.
+    We therefore place consistency context (canonical character/location
+    descriptions) RIGHT after the style anchor and BEFORE the scene-specific
+    content. This is the single biggest lever for cross-scene character
+    identity stability — the previous tail-end placement meant character
+    descriptions had near-zero attention weight.
+    """
+    parts = [STYLE_PREFIX]
+
+    if consistency:
+        parts.append(consistency)
+
+    parts.append(visualSummary.strip())
 
     if answers:
         answerDetails = ", ".join(f"{v}" for v in answers.values() if v)
@@ -47,3 +61,21 @@ def buildPrompt(
     parts.append(STYLE_SUFFIX)
 
     return ", ".join(parts)
+
+
+def buildCharacterPortraitPrompt(name: str, description: str) -> str:
+    """A focused prompt for generating a clean reference portrait of one character.
+
+    Used at scene-lock time to produce the per-character image stored in the
+    ``characters`` table. Single subject, neutral background, the same style
+    anchors as scene generation so the portrait blends with later scene art.
+    """
+    clean_desc = description.replace("(inferred)", "").strip()
+    parts = [
+        STYLE_PREFIX,
+        f"character reference portrait of {name}",
+        clean_desc,
+        "single subject, head and shoulders, neutral plain background, even soft lighting, front-facing, no text, no props",
+        STYLE_SUFFIX,
+    ]
+    return ", ".join(p for p in parts if p)
