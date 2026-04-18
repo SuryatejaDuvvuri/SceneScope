@@ -16,7 +16,7 @@ from app.models.scene import (
     ConsultRequest, ConsultFollowUpRequest, ConsultResponse,
 )
 from app.models.common import StructureAnalysis
-from app.services.promptBuilder import buildPrompt, PROMPT_BUILDER_VERSION
+from app.services.promptBuilder import buildPrompt, enrich_subjects_with_descriptions, PROMPT_BUILDER_VERSION
 from app.services.imageGenerator import generateImage
 from app.services.moodClassifier import classify_mood
 from app.services.shotSuggester import suggest_shots
@@ -33,13 +33,7 @@ from app.services.visualConsistency import (
 from app.services.structureAnalyzer import analyze_structure
 from app.services.directorAgent import consult_director, continue_consultation
 from app.services.sceneAnalyzer import generateRefinementQuestions
-from app.services.scenePlanner import (
-    plan_scene_to_shot,
-    parse_refinement_intent,
-    SCENE_PLANNER_VERSION,
-    INTENT_PARSER_VERSION,
-)
-from app.services.textSummary import summarize_to_chars
+from app.services.filmStyleExpander import expand_film_styles
 from app.services.usageLimits import enforce_daily_image_limit
 from app.config import settings
 from app.auth import get_current_user
@@ -225,79 +219,42 @@ async def refine_scene(scene_id: str, body: RefineRequest, user: dict = Depends(
             )
 
         # Rebuild prompt with user answers + director's interpretation.
-        # Consistency is now placed at the FRONT of the prompt (right after the
-        # style anchor) so character/location descriptions get high attention
-        # weight from the diffusion model — this is the single biggest lever
-        # for cross-scene character identity stability.
+        # No extra LLM layers (planner / intent parser) — they over-steered prompts
+        # and caused setting drift. Character names are extracted directly from the
+        # script text and enriched with canonical descriptions from the character
+        # roster so the model knows who looks like what.
         scene_dialogue = from_json(scene["dialogue"]) if scene["dialogue"] else []
-        shot_plan = plan_scene_to_shot(
-            heading=scene["heading"] or "UNKNOWN",
-            description=scene["description"] or "",
-            mood=scene["mood"] or "neutral",
-            visual_summary=scene["visual_summary"] or "",
-            dialogue_lines=scene_dialogue,
-            time_period=project_time_period,
-            tone=project_tone,
-        )
-        required_subjects = shot_plan.required_subjects or _required_subjects(scene["description"] or "", scene_dialogue)
-        ambient_hint = shot_plan.ambient_population_hint or _ambient_population_hint(scene["heading"], scene["description"] or "")
-        planning_directives = [
-            shot_plan.setting_direction,
-            shot_plan.camera_direction,
-            shot_plan.blocking_direction,
-            shot_plan.lighting_direction,
-            *shot_plan.continuity_constraints,
-            *shot_plan.negative_constraints,
-        ]
+
+        # Enrich required subjects with canonical physical descriptions when available.
+        # e.g. ["Mark", "Erica"] → ["Mark (young intense programmer, dark hoodie)", "Erica (confident, preppy coat)"]
+        known_roster = await get_existing_characters(db, scene["project_id"])
+        raw_subjects = _required_subjects(scene["description"] or "", scene_dialogue)
+        enriched_subjects = enrich_subjects_with_descriptions(raw_subjects, known_roster)
+        ambient_hint = _ambient_population_hint(scene["heading"], scene["description"] or "")
+
+        # Expand reference film titles to actionable visual descriptors via Groq.
+        # "Dune" → "Dune (vast desert vistas, extreme wide shots, harsh backlit silhouettes, ...)"
+        expanded_films = expand_film_styles(project_films) if project_films else []
+
+        # Director modifier is the single source of cinematic direction.
+        # The director agent already interprets feedback into a prompt_modifier —
+        # we don't need a second intent-parser layer on top of it.
+        director_modifier = director_notes.get("prompt_modifier") if director_notes else None
+        if not director_modifier and body.feedback:
+            director_modifier = f"artistic direction: {body.feedback}"
+
         prompt = buildPrompt(
             visualSummary=scene["visual_summary"] or "",
             mood=scene["mood"] or "neutral",
             answers=body.answers,
-            reference_films=project_films,
+            reference_films=expanded_films or None,
             consistency=consistencySuffix or None,
-            required_subjects=required_subjects or None,
-            planning_directives=planning_directives,
+            required_subjects=enriched_subjects or None,
             time_period=project_time_period,
             tone=project_tone,
             ambient_population_hint=ambient_hint,
+            director_modifier=director_modifier,
         )
-
-        intent = parse_refinement_intent(
-            heading=scene["heading"] or "",
-            description=scene["description"] or "",
-            feedback=body.feedback or "",
-            answers=body.answers,
-        )
-        if intent.preserve_constraints:
-            prompt += ", preserve constraints: " + "; ".join(intent.preserve_constraints[:5])
-        if intent.change_requests:
-            prompt += ", requested changes: " + "; ".join(intent.change_requests[:6])
-        if intent.avoid_changes:
-            prompt += ", avoid: " + "; ".join(intent.avoid_changes[:5])
-
-        # Append director's refined prompt modifier (or raw feedback as fallback)
-        if director_notes:
-            prompt += f", {director_notes['prompt_modifier']}"
-        elif body.feedback:
-            prompt += f", artistic direction: {body.feedback}"
-
-        # Carry forward key visual anchors from previous iteration (within-scene)
-        if prev_prompt:
-            # Extract the core visual description from the previous prompt
-            # (strip the style prefix and mood modifier, keep scene-specific content)
-            # to give the image generator real context about what to maintain
-            core_prev = prev_prompt
-            # Remove the style prefix that isn't scene-specific
-            from app.services.promptBuilder import STYLE_PREFIX
-            if core_prev.startswith(STYLE_PREFIX):
-                core_prev = core_prev[len(STYLE_PREFIX):].lstrip(", ")
-            core_prev = summarize_to_chars(
-                core_prev,
-                400,
-                focus_text=f"{scene['heading'] or ''} {scene['mood'] or ''} visual continuity",
-            )
-            prompt += f", IMPORTANT - match previous frame: {core_prev}"
-            prompt += ", maintain exact same character appearances, setting layout, architecture, camera angle, color palette, and art style as previous iteration. Only apply the requested refinements, do not change anything else"
 
         # Generate new sketch
         reference_image_url = None
@@ -344,7 +301,7 @@ async def refine_scene(scene_id: str, body: RefineRequest, user: dict = Depends(
                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (iteration_id, scene_id, next_iteration, prompt,
              to_json(body.answers), body.feedback, sketch_url, image.source,
-             to_json(director_notes), settings.GROQ_MODEL, SCENE_PLANNER_VERSION, INTENT_PARSER_VERSION, PROMPT_BUILDER_VERSION)
+             to_json(director_notes), settings.GROQ_MODEL, None, None, PROMPT_BUILDER_VERSION)
         )
 
         # Update scene's current iteration

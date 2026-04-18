@@ -7,9 +7,9 @@ from app.models.scene import ScenesCreate, SceneResponse, SceneIterationResponse
 from app.services.parser import ParsedScene, buildScene, parseHeading
 from app.services.moodClassifier import classify_mood
 from app.services.sceneAnalyzer import analyzeScene
-from app.services.promptBuilder import buildPrompt, PROMPT_BUILDER_VERSION
+from app.services.promptBuilder import buildPrompt, enrich_subjects_with_descriptions, PROMPT_BUILDER_VERSION
 from app.services.imageGenerator import generateImage
-from app.services.scenePlanner import plan_scene_to_shot, SCENE_PLANNER_VERSION
+from app.services.filmStyleExpander import expand_film_styles
 from app.config import settings
 from app.services.visualConsistency import (
     extractVisualDetails,
@@ -322,33 +322,24 @@ async def create_scenes(project_id: str, body: ScenesCreate, user: dict = Depend
             )
 
             scene_dialogue = scene_dialogues[idx] if idx < len(scene_dialogues) else []
-            shot_plan = plan_scene_to_shot(
-                heading=parsed.heading or "UNKNOWN",
-                description=parsed.description,
-                mood=mood_result.mood,
-                visual_summary=analysis.visualSummary,
-                dialogue_lines=scene_dialogue,
-                time_period=project["time_period"],
-                tone=project["tone"],
-            )
-            required_subjects = shot_plan.required_subjects or _required_subjects(parsed.description, scene_dialogue)
-            ambient_hint = shot_plan.ambient_population_hint or _ambient_population_hint(parsed.heading, parsed.description)
-            planning_directives = [
-                shot_plan.setting_direction,
-                shot_plan.camera_direction,
-                shot_plan.blocking_direction,
-                shot_plan.lighting_direction,
-                *shot_plan.continuity_constraints,
-                *shot_plan.negative_constraints,
-            ]
+
+            # Extract character names from dialogue + action text and enrich with
+            # any canonical descriptions already in the roster (from prior locked scenes).
+            raw_subjects = _required_subjects(parsed.description, scene_dialogue)
+            enriched_subjects = enrich_subjects_with_descriptions(raw_subjects, known_chars)
+            ambient_hint = _ambient_population_hint(parsed.heading, parsed.description)
+
+            # Expand reference film titles to actionable visual descriptors.
+            # "The Social Network" → "The Social Network (intimate fluorescent-lit interiors, ...)"
+            project_films = from_json(project["films"]) or []
+            expanded_films = expand_film_styles(project_films) if project_films else []
 
             prompt = buildPrompt(
                 visualSummary=analysis.visualSummary,
                 mood=mood_result.mood,
-                reference_films=from_json(project["films"]) or [],
+                reference_films=expanded_films or None,
                 consistency=consistency_suffix or None,
-                required_subjects=required_subjects or None,
-                planning_directives=planning_directives,
+                required_subjects=enriched_subjects or None,
                 time_period=project["time_period"],
                 tone=project["tone"],
                 ambient_population_hint=ambient_hint,
@@ -391,7 +382,7 @@ async def create_scenes(project_id: str, body: ScenesCreate, user: dict = Depend
                     sketch_url,
                     image.source,
                     settings.GROQ_MODEL,
-                    SCENE_PLANNER_VERSION,
+                    None,
                     None,
                     PROMPT_BUILDER_VERSION,
                 )

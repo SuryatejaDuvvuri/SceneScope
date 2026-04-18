@@ -39,7 +39,9 @@ def truncatePrompt(prompt: str, maxLength: int = STABILITY_MAX_PROMPT_LENGTH) ->
     summarized = summarize_to_chars(
         prompt,
         maxLength,
-        focus_text="scene visual composition lighting camera mood",
+        # Include character/continuity terms so the consistency block is NOT
+        # the first thing sacrificed when the prompt overflows the length budget.
+        focus_text="character identity wardrobe scene visual composition lighting camera mood continuity",
     )
     print(f"Prompt summarized from {len(prompt)} to {len(summarized)} chars")
     return summarized
@@ -207,7 +209,6 @@ def generateImageStability(
 def generateImageFal(
     prompt: str,
     reference_image_url: str | None = None,
-    character_ref_image_url: str | None = None,
     seed: Optional[int] = None,
     width: int = 1024,
     height: int = 576,
@@ -215,10 +216,13 @@ def generateImageFal(
     """Generate an image using Flux Pro via fal.ai.
 
     ``reference_image_url`` is a previous *iteration* sketch of the same scene
-    (img2img refinement). ``character_ref_image_url`` is a clean character
-    portrait used for cross-scene character identity. If both are provided we
-    prefer the per-iteration reference (refining a specific frame matters more
-    in the moment).
+    used for img2img refinement (within-scene consistency).
+
+    NOTE: Flux Pro v1.1 does NOT support character-identity conditioning via
+    ``image_url`` — passing a character portrait as the init image causes it to
+    replicate the portrait's crop/composition into the scene, not to recognise
+    the character. Character consistency for Fal is handled entirely through the
+    text prompt (INCLUDE IN FRAME + descriptions). Do not pass character refs here.
     """
     if not settings.FAL_KEY:
         raise RuntimeError("FAL_KEY not configured")
@@ -236,12 +240,11 @@ def generateImageFal(
     if seed is not None:
         input_data["seed"] = seed
 
-    img_url = reference_image_url or character_ref_image_url
-    if img_url:
-        input_data["image_url"] = img_url
-        # Iteration refinement should follow the previous frame closely; a
-        # cross-scene character ref should bias only mildly toward the portrait.
-        input_data["strength"] = 0.65 if reference_image_url else 0.35
+    if reference_image_url:
+        # Previous-iteration sketch as img2img init — keeps within-scene visual
+        # continuity when refining. strength=0.65 preserves ~65% of the reference.
+        input_data["image_url"] = reference_image_url
+        input_data["strength"] = 0.65
 
     try:
         os.environ["FAL_KEY"] = settings.FAL_KEY
@@ -286,7 +289,7 @@ def generateImageIdeogram(
         "prompt": final_prompt,
         "aspect_ratio": "ASPECT_16_9",
         "model": "V_2",
-        "style_type": "DESIGN",
+        "style_type": "GENERAL",
         "negative_prompt": NEGATIVE_PROMPT,
     }
     if seed is not None:
@@ -384,13 +387,14 @@ def generateImage(
 
     Parameters:
       - ``reference_image_url``: previous-iteration sketch URL for img2img refinement (within-scene consistency).
-      - ``character_refs``: list of {name, description, image_url, seed} for characters the project knows about.
-        When present, providers that support character conditioning are tried first.
-      - ``seed``: deterministic seed (typically derived from project_id) so style/composition stays stable across scenes.
-      - ``scene_text``: scene description used to pick the most relevant character ref for image-prompted providers.
-      - ``strict_reference_mode``: when True and ``reference_image_url`` exists, only
-        img2img-capable providers are allowed. This prevents silent fallback to
-        text-only generation that breaks character continuity during refinement.
+        Only passed to providers that actually support img2img (fal, replicate). Ideogram is excluded.
+      - ``character_refs``: list of {name, description, image_url} for characters with locked portraits.
+        When present, Ideogram is preferred (it uses character_reference conditioning natively).
+        Character identity on other providers is handled via the text prompt (INCLUDE IN FRAME + descriptions).
+      - ``seed``: deterministic seed (from project_id hash) so style/composition stays stable across scenes.
+      - ``scene_text``: kept for API compatibility; currently unused inside this function.
+      - ``strict_reference_mode``: when True and ``reference_image_url`` exists, only img2img-capable
+        providers (fal, replicate) are used. Ideogram is never in the img2img list.
     """
     errors: list[str] = []
     providers = _get_provider_order()
@@ -399,24 +403,27 @@ def generateImage(
     if character_refs and "ideogram" not in providers:
         providers = ["ideogram"] + providers
 
-    # When refining with a reference image, prioritize providers that support img2img.
+    # When refining with a reference image, prioritize providers that actually
+    # support img2img. Ideogram has no img2img path — exclude it here so
+    # STRICT_REFERENCE_REFINEMENT doesn't silently pick Ideogram and drop
+    # the previous-frame conditioning.
     if reference_image_url:
-        img2img_providers = [p for p in providers if p in {"replicate", "fal", "ideogram"}]
+        img2img_providers = [p for p in providers if p in {"replicate", "fal"}]
         text_only_providers = [p for p in providers if p not in img2img_providers]
         providers = img2img_providers if strict_reference_mode else (img2img_providers + text_only_providers)
-
-    primary_ref = _pick_primary_character_ref(character_refs, scene_text)
-    primary_ref_url = primary_ref["image_url"] if primary_ref else None
 
     for provider in providers:
         try:
             if provider == "stability":
                 result = generateImageStability(prompt, seed=seed)
             elif provider == "fal":
+                # Character identity on Fal is handled entirely via the text prompt
+                # (INCLUDE IN FRAME + descriptions). Do NOT pass a portrait as
+                # image_url — Flux Pro v1.1 treats it as a composition init, not
+                # an identity conditioner, causing "portrait-in-a-bar" outputs.
                 result = generateImageFal(
                     prompt,
                     reference_image_url=reference_image_url,
-                    character_ref_image_url=primary_ref_url,
                     seed=seed,
                 )
             elif provider == "ideogram":
@@ -473,7 +480,7 @@ def generateCharacterPortrait(
                     "prompt": _prepare_prompt(prompt),
                     "aspect_ratio": "ASPECT_3_4",
                     "model": "V_2",
-                    "style_type": "DESIGN",
+                    "style_type": "GENERAL",
                     "negative_prompt": NEGATIVE_PROMPT,
                 }
                 if seed is not None:

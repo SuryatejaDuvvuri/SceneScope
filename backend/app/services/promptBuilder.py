@@ -18,19 +18,33 @@ MOOD_MODIFIERS = {
     "surprise": "dramatic lighting shifts, dynamic angles, high contrast, sharp focus, wide framing",
 }
 
+# Medium anchor — set at the very top so the model commits to this style before
+# reading any scene content.
 STYLE_PREFIX = (
     "2D illustrated storyboard keyframe, hand-painted production art, colored ink and watercolor wash, "
     "mild graphic flattening — reads as drawn boards, not a photograph"
 )
-PROMPT_BUILDER_VERSION = "prompt-builder-v2"
+
+PROMPT_BUILDER_VERSION = "prompt-builder-v3"
+
+# Style reinforcement — repeated at the end to counteract any photorealism drift
+# introduced by long scene descriptions.
 STYLE_SUFFIX = (
     "loose painted edges, visible brushstrokes, simplified faces and hands, stylized not photographic, "
     "no DSLR snapshot, no hyperreal skin or pore detail, no glossy 3D render"
 )
+
+# The craft priorities a professional storyboard artist brings to every panel.
+# Written as instructions to the model, not as a genre label.
 STORYBOARD_PRIORITIES = (
-    "storyboard priorities: clear perspective and depth readability, believable simplified anatomy, "
-    "clean staging/blocking and silhouettes, expressive acting poses/facial intent, sequence-art clarity "
-    "that communicates ideas and emotion fast; prefer confident sketch readability over polished detail"
+    "draw this like a professional storyboard artist: "
+    "clear perspective lines and readable depth planes, "
+    "simplified but believable anatomy that reads from a distance, "
+    "staging and blocking that shows character relationships and power dynamics at a glance, "
+    "expressive acting poses that convey emotion without dialogue — posture, gesture, eyeline, "
+    "silhouette clarity so every figure is immediately readable, "
+    "composition that guides the eye to the story beat in this frame, "
+    "goal is to communicate the idea and feeling fast — confident sketch over polished finish"
 )
 
 
@@ -41,74 +55,129 @@ def buildPrompt(
     reference_films: Optional[list[str]] = None,
     consistency: Optional[str] = None,
     required_subjects: Optional[list[str]] = None,
-    planning_directives: Optional[list[str]] = None,
     time_period: Optional[str] = None,
     tone: Optional[str] = None,
     ambient_population_hint: Optional[str] = None,
+    director_modifier: Optional[str] = None,
 ) -> str:
-    """Compose the final image prompt.
+    """Compose the final image prompt for one storyboard keyframe.
 
-    Token order matters for diffusion models: earlier tokens get more attention.
-    We therefore place consistency context (canonical character/location
-    descriptions) RIGHT after the style anchor and BEFORE the scene-specific
-    content. This is the single biggest lever for cross-scene character
-    identity stability — the previous tail-end placement meant character
-    descriptions had near-zero attention weight.
+    Token-order rationale (earlier = higher diffusion attention):
+    1. Style anchor          — commits the model to 2D storyboard medium immediately
+    2. Identity consistency  — canonical character/location descriptions (most important
+                               for cross-scene stability)
+    3. Setting population    — crowd/ambient context so the model knows the world isn't empty
+    4. Named subjects        — who MUST appear in frame, with physical descriptions when known
+    5. Scene content         — what is actually happening (visual summary + user answers)
+    6. Time period + tone    — period fidelity and overall visual register
+    7. Storyboard craft      — the "how to draw it" meta-instruction
+    8. Mood modifier         — lighting / color palette for this beat
+    9. Reference films       — expanded style descriptors (e.g. "Dune (vast desert vistas...)")
+    10. Director modifier    — any additional cinematic direction from the Director Agent
+    11. Character uniqueness — LAST so it has strong closing-attention weight as a guard
+    12. Style suffix         — reinforces the medium one final time
     """
     parts = [STYLE_PREFIX]
 
+    # ── 2. Identity consistency (highest-priority fixed attribute) ──────────────
     if consistency:
         parts.append(consistency)
 
-    if required_subjects:
-        clean_subjects = [s.strip() for s in required_subjects if s and s.strip()]
-        if clean_subjects:
-            # Hard constraint to prevent "empty room" outputs when scene dialogue
-            # clearly implies on-screen characters.
-            parts.append(
-                "MANDATORY SUBJECTS: include visible human characters "
-                + ", ".join(clean_subjects[:4])
-                + " in frame; do not generate an empty environment-only shot"
-            )
-            parts.append(
-                "CHARACTER UNIQUENESS: each named lead appears as exactly one person in frame — "
-                "no duplicated clones, no repeated identical faces, no twin copies of the same character; "
-                "crowd extras are generic silhouettes, not extra instances of leads"
-            )
-
+    # ── 3. Setting population (crowd / ambient context) ─────────────────────────
     if ambient_population_hint:
         parts.append(ambient_population_hint)
 
-    if planning_directives:
-        directives = [d.strip() for d in planning_directives if d and d.strip()]
-        parts.extend(directives[:8])
+    # ── 4. Named subjects ────────────────────────────────────────────────────────
+    if required_subjects:
+        clean_subjects = [s.strip() for s in required_subjects if s and s.strip()]
+        if clean_subjects:
+            # Hard inclusion constraint — prevents "empty room" outputs when
+            # named characters are clearly on-screen.
+            parts.append(
+                "INCLUDE IN FRAME: "
+                + ", ".join(clean_subjects[:5])
+                + "; do not generate an empty environment-only shot if named characters are present"
+            )
 
-    if time_period:
-        parts.append(f"time period fidelity: {time_period.strip()}")
-
-    if tone:
-        parts.append(f"visual tone target: {tone.strip()}")
-
-    parts.append(STORYBOARD_PRIORITIES)
-
+    # ── 5. Scene content ─────────────────────────────────────────────────────────
     parts.append(visualSummary.strip())
 
     if answers:
-        answerDetails = ", ".join(f"{v}" for v in answers.values() if v)
-        if answerDetails:
-            parts.append(answerDetails)
+        answer_details = ", ".join(v for v in answers.values() if v)
+        if answer_details:
+            parts.append(answer_details)
 
+    # ── 6. Time period + tone ────────────────────────────────────────────────────
+    if time_period:
+        parts.append(f"time period: {time_period.strip()}")
+
+    if tone:
+        parts.append(f"visual tone: {tone.strip()}")
+
+    # ── 7. Storyboard craft priorities ───────────────────────────────────────────
+    parts.append(STORYBOARD_PRIORITIES)
+
+    # ── 8. Mood / lighting ───────────────────────────────────────────────────────
     modifier = MOOD_MODIFIERS.get(mood.lower(), MOOD_MODIFIERS["neutral"])
     parts.append(modifier)
 
+    # ── 9. Reference films (expanded with visual descriptors) ────────────────────
     if reference_films:
         films = ", ".join(f.strip() for f in reference_films if f and f.strip())
         if films:
-            parts.append(f"cinematic influences: {films}")
+            parts.append(f"cinematic references: {films}")
 
+    # ── 10. Director modifier ────────────────────────────────────────────────────
+    if director_modifier and director_modifier.strip():
+        parts.append(director_modifier.strip())
+
+    # ── 11. Character uniqueness (closing guard — strong closing attention) ──────
+    if required_subjects:
+        clean_subjects = [s.strip() for s in required_subjects if s and s.strip()]
+        if clean_subjects:
+            parts.append(
+                "CHARACTER RULE: each named lead appears exactly ONCE in frame — "
+                "no duplicate clones, no repeated identical faces; "
+                "crowd extras are generic background silhouettes, NOT extra copies of the named leads"
+            )
+
+    # ── 12. Style suffix ─────────────────────────────────────────────────────────
     parts.append(STYLE_SUFFIX)
 
     return ", ".join(parts)
+
+
+def enrich_subjects_with_descriptions(
+    names: list[str],
+    known_roster: dict[str, str],
+) -> list[str]:
+    """Add canonical physical descriptions to character names when available.
+
+    Turns ["Mark", "Erica"] into
+    ["Mark (young intense programmer, dark hoodie, sharp eyes)",
+     "Erica (confident, preppy winter coat)"]
+    so the image model knows what each character looks like without relying on
+    prior locked-scene conditioning.
+
+    Caps each description at 70 chars to avoid bloating the prompt.
+    """
+    enriched: list[str] = []
+    for name in names:
+        key = name.strip().upper()
+        desc: Optional[str] = None
+        for roster_name, roster_desc in known_roster.items():
+            if roster_name.strip().upper() == key:
+                desc = roster_desc
+                break
+        if desc:
+            # Remove "(inferred)" tags and trim
+            desc = desc.replace("(inferred)", "").strip()
+            if len(desc) > 70:
+                desc = desc[:70].rsplit(" ", 1)[0]
+            enriched.append(f"{name} ({desc})")
+        else:
+            enriched.append(name)
+    return enriched
 
 
 def buildCharacterPortraitPrompt(name: str, description: str) -> str:
