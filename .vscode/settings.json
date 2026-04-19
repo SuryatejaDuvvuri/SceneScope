@@ -1,0 +1,38 @@
+{
+  "git.ignoredRepositories": [
+    "frontend"
+  ],
+  "files.exclude": {
+    "**/.git": true,
+    "**/.DS_Store": true,
+    "**/node_modules": true,
+    "**/.venv": true,
+    "**/venv": true,
+    "**/__pycache__": true,
+    "backend/static/images": true,
+    "frontend/build": true,
+    "frontend/.react-router": true,
+    "frontend/.wrangler": true
+  },
+  "search.exclude": {
+    "**/node_modules": true,
+    "**/.venv": true,
+    "**/venv": true,
+    "**/__pycache__": true,
+    "backend/static/images": true,
+    "frontend/build": true,
+    "frontend/.react-router": true,
+    "frontend/.wrangler": true
+  },
+  "files.watcherExclude": {
+    "**/.git/**": true,
+    "**/node_modules/**": true,
+    "**/.venv/**": true,
+    "**/venv/**": true,
+    "**/__pycache__/**": true,
+    "backend/static/images/**": true,
+    "frontend/build/**": true,
+    "frontend/.react-router/**": true,
+    "frontend/.wrangler/**": true
+  }
+}

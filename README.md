@@ -123,7 +123,7 @@ For each parsed scene:
 | Frontend | React 19, React Router 7, Vite 7, Tailwind CSS v4 |
 | Backend | FastAPI, Python 3.11+ |
 | Database | SQLite + aiosqlite |
-| Analysis LLM | Groq (`llama-3.1-8b-instant`) |
+| Analysis LLM | Groq (`llama-3.3-70b-versatile`) |
 | Mood Model | HuggingFace Inference API |
 | Image Generation | Stability Core + Replicate (provider order configurable) |
 | Parsing | `screenplay-tools` |
@@ -172,6 +172,9 @@ cp .env.example .env
 
 # run API
 uvicorn app.main:app --reload --port 8000
+
+# evaluate scene-shot planner + refinement intent parser
+python scripts/eval_scene_planner.py
 ```
 
 Important environment values used by current code:
@@ -188,6 +191,8 @@ Important environment values used by current code:
 - `JWT_SECRET_KEY`
 - `FRONTEND_URL`
 - `BACKEND_PUBLIC_URL` (needed for image-conditioned refinement URLs)
+- `ENABLE_SCENE_PLANNER` (default `false`)
+- `ENABLE_REFINEMENT_INTENT_PARSER` (default `false`)
 
 ### Frontend
 
