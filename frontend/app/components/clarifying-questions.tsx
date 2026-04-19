@@ -30,10 +30,10 @@ export function ClarifyingQuestions({
   const hasInput = Object.values(answers).some((a) => a.trim()) || feedback.trim();
 
   return (
-    <div className="space-y-4">
+    <div className="space-y-5">
       {/* ── Questions ── */}
       {questions.length > 0 && (
-        <div className="space-y-3">
+        <div className="space-y-4">
           <h3 className="text-sm font-display text-sand-700 tracking-wider">
             Clarifying Questions
           </h3>
@@ -41,12 +41,12 @@ export function ClarifyingQuestions({
             const text = typeof q === "string" ? q : q.question;
             const suggestion = typeof q === "object" && q.suggestion;
             return (
-              <div key={i}>
-                <label className="block text-sm text-stone-600 mb-1">
+              <div key={i} className="space-y-2">
+                <label className="block text-sm text-stone-700 leading-relaxed">
                   {text}
                 </label>
                 {suggestion && (
-                  <div className="text-xs text-sand-600 mb-1 pl-1">{suggestion}</div>
+                  <div className="text-xs text-sand-600 pl-1">{suggestion}</div>
                 )}
                 <input
                   type="text"
@@ -54,7 +54,7 @@ export function ClarifyingQuestions({
                   onChange={(e) => handleAnswer(text, e.target.value)}
                   disabled={disabled}
                   placeholder="Your answer..."
-                  className="w-full px-3 py-1.5 text-sm bg-white/70 border border-sand-600/25 rounded text-stone-800 placeholder-stone-400 focus:outline-none focus:ring-1 focus:ring-sand-500/40 focus:border-sand-500/40 disabled:opacity-50"
+                  className="w-full px-3 py-2 text-sm bg-white/80 border border-sand-600/25 rounded-lg text-stone-800 placeholder-stone-400 focus:outline-none focus:ring-1 focus:ring-sand-500/40 focus:border-sand-500/40 disabled:opacity-50"
                 />
               </div>
             );
@@ -71,9 +71,9 @@ export function ClarifyingQuestions({
           value={feedback}
           onChange={(e) => setFeedback(e.target.value)}
           disabled={disabled}
-          rows={2}
+          rows={3}
           placeholder="Too bright, should be moodier..."
-          className="w-full px-3 py-1.5 text-sm bg-white/70 border border-sand-600/25 rounded text-stone-800 placeholder-stone-400 focus:outline-none focus:ring-1 focus:ring-sand-500/40 focus:border-sand-500/40 disabled:opacity-50 resize-none"
+          className="w-full px-3 py-2 text-sm bg-white/80 border border-sand-600/25 rounded-lg text-stone-800 placeholder-stone-400 focus:outline-none focus:ring-1 focus:ring-sand-500/40 focus:border-sand-500/40 disabled:opacity-50 resize-none"
         />
       </div>
 

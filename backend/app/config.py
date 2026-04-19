@@ -19,6 +19,7 @@ class Settings(BaseSettings):
     IMAGE_PROVIDER_ORDER: str = "gemini,fal,ideogram,stability,replicate"
     HUGGINGFACE_API_TOKEN: str = ""
     HF_MODEL_ID: str = "your-username/scenescope-mood-classifier"
+    HF_INFERENCE_ENDPOINT_URL: str = ""
     DATABASE_PATH: str = "./scenescope.db"
     STATIC_DIR: str = "./static/images"
     AUDIO_DIR: str = "./static/audio"
@@ -29,6 +30,7 @@ class Settings(BaseSettings):
 
     # Audio / TTS
     ELEVENLABS_API_KEY: str = ""
+    ELEVENLABS_FALLBACK_VOICE_ID: str = ""
 
     # OAuth / Auth
     GOOGLE_CLIENT_ID: str = ""

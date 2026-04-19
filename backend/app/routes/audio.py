@@ -54,12 +54,22 @@ async def generate_audio(scene_id: str, user: dict = Depends(get_current_user)):
         if not dialogue:
             raise HTTPException(status_code=400, detail="Scene has no dialogue to generate audio for")
 
-        result = await generate_scene_audio(
-            scene_id=scene_id,
-            project_id=scene["project_id"],
-            dialogue_lines=dialogue,
-        )
-        return AudioResponse(**result)
+        try:
+            result = await generate_scene_audio(
+                scene_id=scene_id,
+                project_id=scene["project_id"],
+                dialogue_lines=dialogue,
+                scene_context_text=scene["description"] or "",
+            )
+            return AudioResponse(**result)
+        except RuntimeError as exc:
+            msg = str(exc)
+            if "paid_plan_required" in msg or "payment_required" in msg:
+                raise HTTPException(
+                    status_code=402,
+                    detail="Audio generation failed: selected ElevenLabs voice requires a paid plan. Switch to a free voice or upgrade ElevenLabs.",
+                ) from exc
+            raise HTTPException(status_code=502, detail=f"Audio generation failed: {msg}") from exc
     finally:
         await db.close()
 

@@ -45,12 +45,12 @@ export function SceneEditor({ scene, onRefine, onLock, refining }: SceneEditorPr
   return (
     <div className="h-full flex flex-col">
       {/* ── Header ── */}
-      <div className="flex items-center justify-between px-6 py-4 border-b border-sand-600/20 bg-space-900/50 poof">
+      <div className="flex flex-wrap items-start justify-between gap-4 px-8 py-5 border-b border-sand-600/20 bg-space-900/60">
         <div>
-          <h2 className="text-xl font-display text-sand-800 glow-text-sand">
+          <h2 className="text-2xl font-display text-sand-800">
             {scene.heading || `Scene ${scene.scene_number}`}
           </h2>
-          <div className="flex items-center gap-2 mt-1">
+          <div className="flex flex-wrap items-center gap-2 mt-2">
             {scene.mood && <MoodBadge mood={scene.mood} confidence={scene.mood_confidence} />}
             <span className="text-sm text-stone-500 font-mono">
               Iteration {iterationCount}
@@ -61,142 +61,151 @@ export function SceneEditor({ scene, onRefine, onLock, refining }: SceneEditorPr
           <button
             onClick={() => onLock(scene.id)}
             disabled={refining}
-            className="px-4 py-2 bg-sand-700 text-white border border-sand-600 text-sm rounded font-display hover:bg-sand-800 transition-all disabled:opacity-50"
+            className="px-4 py-2.5 bg-sand-700 text-white border border-sand-600 text-sm rounded-lg font-display hover:bg-sand-800 transition-all disabled:opacity-50"
           >
             Lock Scene ✓
           </button>
         ) : (
-          <span className="px-4 py-2 bg-sand-600/15 text-sand-800 border border-sand-600/30 text-sm rounded font-display">
+          <span className="px-4 py-2.5 bg-sand-600/15 text-sand-800 border border-sand-600/30 text-sm rounded-lg font-display">
             Locked ✓
           </span>
         )}
       </div>
 
       {/* ── Side-by-side: Description + Sketch + Iteration History ── */}
-      <div className="flex-1 overflow-auto">
+      <div className="flex-1 min-h-0 flex flex-col">
         {/* Iteration History Bar */}
-        <div className="flex items-center gap-2 px-6 py-2 border-b border-sand-600/10 bg-space-900/30">
-          <span className="text-sm text-stone-500 font-mono">History:</span>
+        <div className="flex flex-wrap items-center gap-2 px-8 py-3 border-b border-sand-600/10 bg-space-900/40">
+          <span className="text-sm text-stone-500 font-mono mr-1">History:</span>
           {scene.iterations.map((it) => (
             <button
               key={it.iteration_number}
               onClick={() => setSelectedIteration(it.iteration_number)}
-              className={`px-2 py-1 rounded text-xs font-mono border ${selectedIteration === it.iteration_number ? 'bg-sand-600/20 text-sand-800 border-sand-500/40' : 'bg-white/40 text-stone-600 border-sand-600/15 hover:border-sand-500/30'} transition-colors`}
+              className={`px-2.5 py-1.5 rounded-md text-xs font-mono border ${selectedIteration === it.iteration_number ? "bg-sand-600/20 text-sand-800 border-sand-500/40" : "bg-white/50 text-stone-600 border-sand-600/15 hover:border-sand-500/30"} transition-colors`}
             >
               {it.iteration_number}
             </button>
           ))}
         </div>
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-0 h-full">
+        <div className="grid grid-cols-1 xl:grid-cols-2 gap-6 p-6 xl:p-8 flex-1 min-h-0">
           {/* ── Left: Description + Controls + Iteration Details ── */}
-          <div className="p-6 border-r border-sand-600/15 overflow-y-auto space-y-4">
+          <div className="space-y-5 overflow-y-auto min-h-0 pr-1">
             {/* Scene Description */}
-            <div>
+            <section className="rounded-xl border border-sand-600/20 bg-white/65 p-5">
               <h3 className="text-base font-display text-sand-700 mb-2">
                 Scene Description
               </h3>
-              <p className="text-base text-stone-600 leading-relaxed whitespace-pre-wrap">
+              <p className="text-base text-stone-700 leading-7 whitespace-pre-wrap">
                 {scene.description}
               </p>
-            </div>
+            </section>
 
             {/* Iteration Details */}
             {selected && (
-              <div className="mb-4">
-                <h4 className="text-sm font-display text-sand-700 mb-1">Refinement #{selected.iteration_number}</h4>
+              <section className="rounded-xl border border-sand-600/20 bg-white/65 p-5">
+                <h4 className="text-sm font-display text-sand-700 mb-3">Refinement #{selected.iteration_number}</h4>
                 {selected.answers && (
-                  <div className="mb-3">
-                    <div className="text-sm text-stone-500 font-mono mb-1">Answers:</div>
-                    <ul className="text-sm text-stone-700 space-y-1">
+                  <div className="mb-4">
+                    <div className="text-xs text-stone-500 font-mono mb-2 uppercase tracking-wide">Answers</div>
+                    <ul className="text-sm text-stone-700 space-y-2">
                       {Object.entries(selected.answers).map(([q, a]) => (
-                        <li key={q}><span className="font-semibold text-sand-700">{q}:</span> {a}</li>
+                        <li key={q} className="leading-relaxed">
+                          <span className="font-semibold text-sand-700">{q}:</span> {a}
+                        </li>
                       ))}
                     </ul>
                   </div>
                 )}
                 {selected.feedback && (
-                  <div className="mb-3">
-                    <div className="text-sm text-stone-500 font-mono mb-1">Feedback:</div>
-                    <div className="text-sm text-stone-700">{selected.feedback}</div>
+                  <div className="mb-4">
+                    <div className="text-xs text-stone-500 font-mono mb-2 uppercase tracking-wide">Feedback</div>
+                    <div className="text-sm text-stone-700 leading-relaxed">{selected.feedback}</div>
                   </div>
                 )}
                 {selected.director_notes && (
-                  <div className="mb-3">
-                    <div className="text-sm text-stone-500 font-mono mb-1">Director Notes:</div>
-                    <div className="text-sm text-stone-700">{selected.director_notes.interpretation}</div>
+                  <div>
+                    <div className="text-xs text-stone-500 font-mono mb-2 uppercase tracking-wide">Director Notes</div>
+                    <div className="text-sm text-stone-700 leading-relaxed">{selected.director_notes.interpretation}</div>
                   </div>
                 )}
-              </div>
+              </section>
             )}
 
             {/* Visual Summary */}
             {scene.visual_summary && (
-              <div>
-                <h3 className="text-base font-display text-sand-700 mb-1">
+              <section className="rounded-xl border border-sand-600/20 bg-white/65 p-5">
+                <h3 className="text-base font-display text-sand-700 mb-2">
                   Visual Summary
                 </h3>
-                <p className="text-base text-stone-500 italic leading-relaxed">
+                <p className="text-base text-stone-600 italic leading-7">
                   {scene.visual_summary}
                 </p>
-              </div>
+              </section>
             )}
 
             {/* Shot Suggestions */}
-            {scene.shot_suggestions && <ShotInfo shots={scene.shot_suggestions} />}
+            {scene.shot_suggestions && (
+              <section className="rounded-xl border border-sand-600/20 bg-white/65 p-5">
+                <ShotInfo shots={scene.shot_suggestions} />
+              </section>
+            )}
 
             {/* Vague Elements */}
             {scene.vague_elements.length > 0 && (
-              <div>
-                <h3 className="text-base font-display text-sand-700 mb-1">
+              <section className="rounded-xl border border-sand-600/20 bg-white/65 p-5">
+                <h3 className="text-base font-display text-sand-700 mb-2">
                   Vague Elements
                 </h3>
-                <ul className="space-y-1.5">
+                <ul className="space-y-2">
                   {scene.vague_elements.map((el, i) => (
                     <li
                       key={i}
-                      className="text-base text-sand-700 flex items-start gap-1.5"
+                      className="text-base text-sand-700 flex items-start gap-2 leading-relaxed"
                     >
-                      <span className="mt-0.5">⚠</span> {el}
+                      <span className="mt-0.5">⚠</span>
+                      <span>{el}</span>
                     </li>
                   ))}
                 </ul>
-              </div>
+              </section>
             )}
 
             {/* Clarifying Questions + Refinement */}
             {canRefine && (
-              <ClarifyingQuestions
-                questions={scene.clarifying_questions}
-                onSubmit={(answers, feedback) => onRefine(scene.id, answers, feedback)}
-                disabled={refining}
-                remainingAttempts={remainingAttempts}
-              />
+              <section className="rounded-xl border border-sand-600/20 bg-white/65 p-5">
+                <ClarifyingQuestions
+                  questions={scene.clarifying_questions}
+                  onSubmit={(answers, feedback) => onRefine(scene.id, answers, feedback)}
+                  disabled={refining}
+                  remainingAttempts={remainingAttempts}
+                />
+              </section>
             )}
 
             {!canRefine && !scene.locked && (
-              <p className="text-base text-stone-500 italic">
+              <p className="text-base text-stone-500 italic px-1">
                 No refinements remaining. Lock the scene to finalize.
               </p>
             )}
           </div>
 
           {/* ── Right: Sketch + Audio ── */}
-          <div className="p-6 bg-space-800/40 flex flex-col gap-6 overflow-y-auto sparkle-particles">
+          <div className="space-y-5 overflow-y-auto min-h-0 pr-1">
             {refining ? (
-              <div className="text-center space-y-3 flex-1 flex flex-col items-center justify-center">
+              <div className="rounded-xl border border-sand-600/20 bg-white/65 p-8 text-center space-y-3 min-h-64 h-[min(52vh,520px)] flex flex-col items-center justify-center">
                 <div className="holo-spinner mx-auto" />
                 <p className="text-sm text-stone-500 font-mono">Generating sketch...</p>
               </div>
             ) : sketchUrl ? (
-              <div className="w-full">
+              <div className="w-full rounded-xl border border-sand-600/20 bg-white/65 p-4">
                 <img
                   src={sketchUrl}
                   alt={`Sketch for ${scene.heading}`}
-                  className="w-full rounded border border-sand-600/25 shadow-lg shadow-sand-300/20"
+                  className="w-full h-[min(52vh,520px)] object-contain bg-black/90 rounded-lg border border-sand-600/25 shadow-lg shadow-sand-300/20"
                 />
               </div>
             ) : (
-              <div className="flex-1 flex items-center justify-center">
+              <div className="rounded-xl border border-sand-600/20 bg-white/65 p-8 flex items-center justify-center min-h-64 h-[min(52vh,520px)]">
                 <p className="text-sm text-stone-500 font-mono">No sketch generated yet</p>
               </div>
             )}

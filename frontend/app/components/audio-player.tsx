@@ -64,18 +64,18 @@ export function AudioPlayer({ sceneId, dialogue }: AudioPlayerProps) {
   if (!dialogue || dialogue.length === 0) return null;
 
   return (
-    <div className="mt-4 border border-sand-600/20 rounded-lg bg-space-900/30 p-4">
+    <div className="w-full rounded-xl border border-sand-600/20 bg-white/65 p-5">
       <h4 className="text-sm font-display text-sand-700 mb-3">Scene Dialogue</h4>
 
       {/* Dialogue transcript */}
-      <div className="space-y-2 mb-4 max-h-40 overflow-y-auto">
+      <div className="space-y-3 mb-5 max-h-56 overflow-y-auto pr-1">
         {dialogue.map((line, i) => (
           <div key={i} className="text-sm">
             <span className="font-semibold text-sand-800">{line.character}</span>
             {line.parenthetical && (
               <span className="text-stone-400 italic ml-1">({line.parenthetical})</span>
             )}
-            <p className="text-stone-600 ml-4">{line.text}</p>
+            <p className="text-stone-700 ml-4 leading-relaxed">{line.text}</p>
           </div>
         ))}
       </div>
@@ -93,7 +93,7 @@ export function AudioPlayer({ sceneId, dialogue }: AudioPlayerProps) {
           />
           <button
             onClick={togglePlay}
-            className="w-9 h-9 flex items-center justify-center rounded-full bg-sand-700 text-white hover:bg-sand-800 transition-colors"
+            className="w-10 h-10 flex items-center justify-center rounded-full bg-sand-700 text-white hover:bg-sand-800 transition-colors shrink-0"
           >
             {playing ? (
               <svg width="14" height="14" viewBox="0 0 14 14" fill="currentColor">
@@ -106,7 +106,7 @@ export function AudioPlayer({ sceneId, dialogue }: AudioPlayerProps) {
               </svg>
             )}
           </button>
-          <div className="flex-1 h-1.5 bg-sand-600/15 rounded-full overflow-hidden">
+          <div className="flex-1 h-2 bg-sand-600/15 rounded-full overflow-hidden">
             <div
               className="h-full bg-sand-700 rounded-full transition-all duration-200"
               style={{ width: `${progress}%` }}
@@ -118,7 +118,7 @@ export function AudioPlayer({ sceneId, dialogue }: AudioPlayerProps) {
           <button
             onClick={handleGenerate}
             disabled={loading}
-            className="text-xs text-sand-600 hover:text-sand-800 font-mono disabled:opacity-50"
+            className="text-xs text-sand-700 hover:text-sand-900 font-mono disabled:opacity-50"
           >
             Regenerate
           </button>

@@ -9,6 +9,8 @@ from app.services.textSummary import summarize_to_chars
 # makes the backend slug too large and blows past the 512MB RAM ceiling on
 # small Render / similar hosts. Remote inference keeps the service lean.
 def _hf_custom_url() -> str:
+    if settings.HF_INFERENCE_ENDPOINT_URL:
+        return settings.HF_INFERENCE_ENDPOINT_URL
     return f"https://router.huggingface.co/hf-inference/models/{settings.HF_MODEL_ID}"
 
 # Fallback: generic emotion model (via HF Inference API)
@@ -39,8 +41,39 @@ class MoodResult:
         return f"MoodResult(mood={self.mood!r}, confidence={self.confidence:.2f}, source={self.source!r})"
 
 
+def _extract_hf_error(data) -> str:
+    if isinstance(data, dict):
+        return str(data.get("error", "")).strip()
+    return ""
+
+
+def _response_json_or_error(response: requests.Response, model_label: str):
+    """Parse JSON safely; return normalized error dict on malformed bodies."""
+    try:
+        return response.json()
+    except Exception:
+        body = (response.text or "").strip().replace("\n", " ")
+        body_preview = body[:160] if body else "<empty>"
+        return {
+            "error": (
+                f"{model_label} returned non-JSON response "
+                f"(HTTP {response.status_code}): {body_preview}"
+            )
+        }
+
+
+def _parse_hf_predictions(results) -> Optional[list]:
+    if results and isinstance(results, list):
+        return results[0] if isinstance(results[0], list) else results
+    return None
+
+
 def classify_mood_custom(text: str) -> Optional[MoodResult]:
     """Primary: fine-tuned SceneScope RoBERTa via HuggingFace Inference API."""
+    # Dedicated HF Inference Endpoints require paid credits.
+    # If no endpoint URL is configured, skip custom model path cleanly.
+    if not settings.HF_INFERENCE_ENDPOINT_URL:
+        return None
     if not settings.HUGGINGFACE_API_TOKEN or not settings.HF_MODEL_ID:
         return None
 
@@ -50,15 +83,16 @@ def classify_mood_custom(text: str) -> Optional[MoodResult]:
 
     try:
         response = requests.post(_hf_custom_url(), headers=headers, json=payload, timeout=20)
-        results = response.json()
+        results = _response_json_or_error(response, "Custom HF model")
 
         # Cold-start: HF returns {"error": "Model ... is currently loading", "estimated_time": N}
-        if isinstance(results, dict) and "error" in results:
-            print(f"Custom HF model unavailable: {results.get('error')}")
+        error_msg = _extract_hf_error(results)
+        if error_msg:
+            print(f"Custom HF model unavailable: {error_msg}")
             return None
 
-        if results and isinstance(results, list):
-            predictions = results[0] if isinstance(results[0], list) else results
+        predictions = _parse_hf_predictions(results)
+        if predictions:
             top = max(predictions, key=lambda x: x["score"])
             return MoodResult(
                 mood=top["label"],
@@ -77,10 +111,15 @@ def classify_mood_generic(text: str) -> Optional[MoodResult]:
 
     try:
         response = requests.post(HF_GENERIC_URL, headers=headers, json=payload, timeout=15)
-        results = response.json()
+        results = _response_json_or_error(response, "Generic HF model")
 
-        if results and isinstance(results, list):
-            predictions = results[0] if isinstance(results[0], list) else results
+        error_msg = _extract_hf_error(results)
+        if error_msg:
+            print(f"Generic HF model unavailable: {error_msg}")
+            return None
+
+        predictions = _parse_hf_predictions(results)
+        if predictions:
             top = max(predictions, key=lambda x: x["score"])
             mood = EMOTION_TO_MOOD.get(top["label"], "somber")
             return MoodResult(

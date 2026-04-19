@@ -144,7 +144,7 @@ export default function ProjectWorkspace() {
   return (
     <div className="h-screen flex flex-col bg-space-950">
       {/* ── Top Bar ── */}
-      <header className="flex items-center justify-between px-5 py-3 bg-space-900/80 border-b border-sand-600/20 backdrop-blur-sm">
+      <header className="flex items-center justify-between px-6 py-4 bg-space-900/85 border-b border-sand-600/20 backdrop-blur-sm">
         <div className="flex items-center gap-3">
           <button
             onClick={() => navigate("/")}
@@ -153,7 +153,7 @@ export default function ProjectWorkspace() {
             ←
           </button>
           <div>
-            <h1 className="font-display text-xl font-semibold text-sand-800 glow-text-sand">{project.title}</h1>
+            <h1 className="font-display text-2xl font-semibold text-sand-800">{project.title}</h1>
             <p className="text-sm text-stone-500 font-mono">
               {project.genre}{project.time_period ? ` · ${project.time_period}` : ""}
               {hasScenes ? ` · ${project.scenes.length} scenes` : ""}
@@ -203,9 +203,9 @@ export default function ProjectWorkspace() {
       {/* ── Script Input Area ── */}
       {hasScenes ? (
         /* Collapsed bar when scenes exist */
-        <div className="border-b border-sand-600/15 bg-space-900/50">
+        <div className="border-b border-sand-600/15 bg-space-900/55">
           {inputExpanded ? (
-            <div className="px-5 py-4">
+            <div className="px-6 py-5">
               <div className="flex gap-3 items-start">
                 <div className="flex-1 flex flex-col gap-2">
                   <textarea
@@ -251,7 +251,7 @@ export default function ProjectWorkspace() {
               </div>
             </div>
           ) : (
-            <div className="flex items-center justify-between px-5 py-2.5">
+            <div className="flex items-center justify-between px-6 py-3">
               <span className="text-xs text-stone-500 font-mono">
                 {project.scenes.length} scenes loaded
               </span>
@@ -266,7 +266,7 @@ export default function ProjectWorkspace() {
         </div>
       ) : (
         /* Full input panel when no scenes */
-        <div className="px-5 py-5 bg-space-900/60 border-b border-sand-600/15">
+        <div className="px-6 py-6 bg-space-900/60 border-b border-sand-600/15">
           <div className="flex gap-4 items-start max-w-full">
             <div className="flex-1 flex flex-col gap-2">
               <textarea
@@ -307,8 +307,8 @@ export default function ProjectWorkspace() {
 
       {/* ── Horizontal Scene Strip ── */}
       {hasScenes && (
-        <div className="border-b border-sand-600/15 bg-space-900/40 swish">
-          <div className="flex items-center gap-2 px-5 py-2.5 overflow-x-auto scrollbar-thin">
+        <div className="border-b border-sand-600/15 bg-space-900/45">
+          <div className="flex items-center gap-2 px-6 py-3 overflow-x-auto scrollbar-thin">
             {project.scenes.map((scene) => (
               <SceneCard
                 key={scene.id}
