@@ -93,6 +93,7 @@ CREATE TABLE IF NOT EXISTS character_voices (
 );
 
 CREATE INDEX IF NOT EXISTS idx_projects_user_id ON projects(user_id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_projects_one_per_user ON projects(user_id) WHERE user_id IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_scenes_project_id ON scenes(project_id);
 CREATE INDEX IF NOT EXISTS idx_iterations_scene_id ON scene_iterations(scene_id);
 CREATE INDEX IF NOT EXISTS idx_characters_project_id ON characters(project_id);

@@ -41,8 +41,9 @@ class Settings(BaseSettings):
     BACKEND_PUBLIC_URL: str = ""
 
     # Product limits / abuse guardrails
-    MAX_SCENES_PER_PROJECT: int = 60
-    MAX_SCENES_PER_UPLOAD: int = 20
+    MAX_PROJECTS_PER_USER: int = 1
+    MAX_SCENES_PER_PROJECT: int = 3
+    MAX_SCENES_PER_UPLOAD: int = 3
     MAX_IMAGE_GENERATIONS_PER_DAY: int = 120
 
     # Consistency behavior

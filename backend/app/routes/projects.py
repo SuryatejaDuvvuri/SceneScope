@@ -1,5 +1,6 @@
 import uuid
 import re
+import aiosqlite
 from fastapi import APIRouter, HTTPException, Depends
 from app.db import get_db, to_json, from_json
 from app.models.project import ProjectCreate, ProjectResponse, ProjectSummary
@@ -23,6 +24,7 @@ from app.models.common import VisualContext
 from app.auth import get_current_user
 from app.services.usageLimits import (
     enforce_daily_image_limit,
+    enforce_project_count_limit,
     enforce_project_scene_limit,
     enforce_upload_scene_limit,
 )
@@ -175,26 +177,42 @@ def _ambient_population_hint(heading: str | None, description: str) -> str | Non
 @router.post("/projects", response_model=ProjectResponse)
 async def create_project(body: ProjectCreate, user: dict = Depends(get_current_user)):
     db = await get_db()
-    project_id = uuid.uuid4().hex
-    await db.execute(
-        "INSERT INTO projects (id, user_id, title, genre, time_period, tone, films) VALUES (?, ?, ?, ?, ?, ?, ?)",
-        (project_id, user["id"], body.title, body.genre, body.time_period, body.tone, to_json(body.films))
-    )
-    await db.commit()
-    row = await db.execute("SELECT * FROM projects WHERE id = ?", (project_id,))
-    project = await row.fetchone()
-    await db.close()
-    return ProjectResponse(
-        id=project["id"],
-        title=project["title"],
-        genre=project["genre"],
-        time_period=project["time_period"],
-        tone=project["tone"],
-        films=from_json(project["films"]) or [],
-        scenes=[],
-        created_at=project["created_at"],
-        updated_at=project["updated_at"]
-    )
+    try:
+        await enforce_project_count_limit(db, user["id"])
+        project_id = uuid.uuid4().hex
+        try:
+            await db.execute(
+                "INSERT INTO projects (id, user_id, title, genre, time_period, tone, films) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (project_id, user["id"], body.title, body.genre, body.time_period, body.tone, to_json(body.films))
+            )
+            await db.commit()
+        except aiosqlite.IntegrityError as exc:
+            # Race-safe fallback: DB unique index rejects concurrent second insert.
+            if "idx_projects_one_per_user" in str(exc) or "projects.user_id" in str(exc):
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        f"Pilot limit reached: {settings.MAX_PROJECTS_PER_USER} project per user. "
+                        "Delete your existing project to create a new one."
+                    ),
+                ) from exc
+            raise
+
+        row = await db.execute("SELECT * FROM projects WHERE id = ?", (project_id,))
+        project = await row.fetchone()
+        return ProjectResponse(
+            id=project["id"],
+            title=project["title"],
+            genre=project["genre"],
+            time_period=project["time_period"],
+            tone=project["tone"],
+            films=from_json(project["films"]) or [],
+            scenes=[],
+            created_at=project["created_at"],
+            updated_at=project["updated_at"]
+        )
+    finally:
+        await db.close()
 
 
 @router.get("/projects", response_model=list[ProjectSummary])

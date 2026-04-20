@@ -12,12 +12,14 @@ export default function NewProject() {
   const [timePeriod, setTimePeriod] = useState("");
   const [tone, setTone] = useState("");
   const [filmsInput, setFilmsInput] = useState("");
+  const [error, setError] = useState<string | null>(null);
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     if (!title.trim()) return;
 
     setSubmitting(true);
+    setError(null);
     try {
       const films = filmsInput
         .split(",")
@@ -34,6 +36,7 @@ export default function NewProject() {
       navigate(`/projects/${project.id}`);
     } catch (err) {
       console.error("Failed to create project:", err);
+      setError(err instanceof Error ? err.message : "Failed to create project");
       setSubmitting(false);
     }
   }
@@ -56,6 +59,11 @@ export default function NewProject() {
       {/* ── Form ── */}
       <main className="max-w-2xl mx-auto px-6 py-8">
         <form onSubmit={handleSubmit} className="space-y-6">
+          {error && (
+            <div className="px-3 py-2 rounded border border-red-300/70 bg-red-50/70 text-sm text-red-700">
+              {error}
+            </div>
+          )}
           {/* Title */}
           <div>
             <label className="block text-sm font-display text-sand-700 tracking-wider mb-1">

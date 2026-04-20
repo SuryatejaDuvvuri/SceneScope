@@ -18,6 +18,7 @@ export default function Home() {
   const [projects, setProjects] = useState<ProjectSummary[]>([]);
   const [loading, setLoading] = useState(true);
   const [deletingId, setDeletingId] = useState<string | null>(null);
+  const hasProject = projects.length > 0;
 
   useEffect(() => {
     if (!user) {
@@ -117,6 +118,36 @@ export default function Home() {
         <div className="absolute bottom-10 left-1/2 -translate-x-1/2 flex flex-col items-center gap-2 opacity-40">
           <span className="text-xs text-stone-500 font-mono tracking-widest">SCROLL</span>
           <div className="w-px h-8 bg-gradient-to-b from-sand-600/50 to-transparent" />
+        </div>
+      </section>
+
+      <section className="py-14">
+        <div className="max-w-5xl mx-auto px-6">
+          <div className="rounded-xl border border-sand-600/25 bg-white/45 p-7">
+            <h3 className="font-display text-2xl text-sand-800 mb-4">Pilot Usage & Expectations</h3>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 mb-4">
+              {[
+                "1 project per user",
+                "1-3 scenes per upload",
+                "1-3 scenes per project",
+                "120 image generations/day",
+                "3 refinements max per scene",
+                "Avoid spamming generate actions",
+              ].map((item) => (
+                <div key={item} className="flex items-start gap-2 rounded-md bg-white/65 border border-sand-600/20 px-3 py-2">
+                  <span className="text-sand-700 mt-0.5">•</span>
+                  <span className="text-sm text-stone-700 font-mono">{item}</span>
+                </div>
+              ))}
+            </div>
+            <p className="text-sm text-stone-600 leading-relaxed">
+              This is a pilot release. Generated storyboard images and dialogue audio are creative aids, not final production output.
+              If tone is off, refine with clearer scene details and feedback.
+            </p>
+            <p className="text-sm text-stone-600 leading-relaxed mt-2">
+              Free-tier hosting may pause or reset after inactivity. Export any important storyboard work promptly.
+            </p>
+          </div>
         </div>
       </section>
 
@@ -252,9 +283,10 @@ export default function Home() {
             <h2 className="font-display text-3xl text-sand-800">Your Projects</h2>
             <button
               onClick={() => navigate("/projects/new")}
-              className="px-5 py-2.5 bg-sand-700 text-white border border-sand-600 rounded text-sm font-display hover:bg-sand-800 transition-all shadow-sm"
+              disabled={hasProject}
+              className="px-5 py-2.5 bg-sand-700 text-white border border-sand-600 rounded text-sm font-display hover:bg-sand-800 transition-all shadow-sm disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-sand-700"
             >
-              New Project
+              {hasProject ? "Pilot: 1 Project Max" : "New Project"}
             </button>
           </div>
 

@@ -5,6 +5,17 @@ import { getProject, createScenes, refineScene, lockScene, resetScenes } from "~
 import { SceneCard } from "~/components/scene-card";
 import { SceneEditor } from "~/components/scene-editor";
 
+const PILOT_RULES = [
+  "1 project per user",
+  "1-3 scenes per upload",
+  "1-3 scenes per project",
+  "Max 120 image generations per day",
+  "Max 3 refinements per scene",
+  "Please do not spam generation actions",
+  "Dialogue audio is a draft aid and may vary in tone",
+  "Free-tier backend may clear inactive pilot data",
+];
+
 export default function ProjectWorkspace() {
   const { id } = useParams();
   const navigate = useNavigate();
@@ -144,7 +155,7 @@ export default function ProjectWorkspace() {
   return (
     <div className="h-screen flex flex-col bg-space-950">
       {/* ── Top Bar ── */}
-      <header className="flex items-center justify-between px-6 py-4 bg-space-900/85 border-b border-sand-600/20 backdrop-blur-sm">
+      <header className="flex items-center justify-between px-6 py-5 bg-space-900/85 border-b border-sand-600/20 backdrop-blur-sm">
         <div className="flex items-center gap-3">
           <button
             onClick={() => navigate("/")}
@@ -199,6 +210,20 @@ export default function ProjectWorkspace() {
           )}
         </div>
       </header>
+
+      <section className="px-6 py-5 border-b border-sand-600/15 bg-sand-100/60">
+        <div className="rounded-xl border border-sand-600/20 bg-white/65 p-4">
+          <h2 className="text-sm font-display text-sand-800 mb-3">Pilot Usage Rules</h2>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+            {PILOT_RULES.map((rule) => (
+              <div key={rule} className="flex items-start gap-2 rounded-md bg-white/70 border border-sand-600/15 px-3 py-2">
+                <span className="text-sand-700 mt-0.5">•</span>
+                <span className="text-xs text-stone-700 font-mono">{rule}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      </section>
 
       {/* ── Script Input Area ── */}
       {hasScenes ? (

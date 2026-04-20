@@ -50,6 +50,28 @@ async def init_db():
                 await db.execute("ALTER TABLE projects ADD COLUMN user_id TEXT REFERENCES users(id)")
                 await db.commit()
 
+            # Enforce pilot one-project-per-user at DB level when data is clean.
+            dup_row = await db.execute(
+                """
+                SELECT user_id, COUNT(*) as c
+                FROM projects
+                WHERE user_id IS NOT NULL
+                GROUP BY user_id
+                HAVING c > 1
+                LIMIT 1
+                """
+            )
+            duplicate = await dup_row.fetchone()
+            if not duplicate:
+                await db.execute(
+                    "CREATE UNIQUE INDEX IF NOT EXISTS idx_projects_one_per_user ON projects(user_id) WHERE user_id IS NOT NULL"
+                )
+                await db.commit()
+            else:
+                print(
+                    "Skipping idx_projects_one_per_user: existing duplicate projects detected for at least one user."
+                )
+
             # Add dialogue column to scenes if missing
             cols = await db.execute("PRAGMA table_info(scenes)")
             col_names = [c["name"] for c in await cols.fetchall()]

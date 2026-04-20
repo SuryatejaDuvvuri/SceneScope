@@ -3,6 +3,24 @@ from fastapi import HTTPException
 from app.config import settings
 
 
+async def enforce_project_count_limit(db, user_id: str) -> None:
+    """Limit how many pilot projects a single user can create."""
+    row = await db.execute(
+        "SELECT COUNT(*) as c FROM projects WHERE user_id = ?",
+        (user_id,),
+    )
+    current = await row.fetchone()
+    project_count = current["c"] if current else 0
+    if project_count >= settings.MAX_PROJECTS_PER_USER:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Pilot limit reached: {settings.MAX_PROJECTS_PER_USER} project per user. "
+                "Delete your existing project to create a new one."
+            ),
+        )
+
+
 async def enforce_project_scene_limit(db, project_id: str, additional_scenes: int) -> None:
     """Prevent a single project from growing unbounded."""
     row = await db.execute(
@@ -24,13 +42,18 @@ async def enforce_project_scene_limit(db, project_id: str, additional_scenes: in
 
 def enforce_upload_scene_limit(parsed_scene_count: int) -> None:
     """Guard expensive batch scene generation from huge screenplay pastes."""
+    if parsed_scene_count <= 0:
+        raise HTTPException(
+            status_code=400,
+            detail="No scenes detected. Include at least 1 scene heading (INT./EXT.) or screenplay block.",
+        )
     if parsed_scene_count > settings.MAX_SCENES_PER_UPLOAD:
         raise HTTPException(
             status_code=400,
             detail=(
                 f"Upload contains {parsed_scene_count} scenes. "
                 f"Maximum per upload is {settings.MAX_SCENES_PER_UPLOAD}. "
-                "Split your screenplay into smaller chunks and add scenes in batches."
+                "Split your screenplay into smaller chunks."
             ),
         )
 
